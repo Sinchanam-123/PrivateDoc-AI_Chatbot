@@ -1,5 +1,6 @@
 """app.py - Streamlit interface for Private Document AI (localhost only)."""
 import html
+import re
 
 import streamlit as st
 
@@ -11,30 +12,32 @@ st.set_page_config(page_title="Private Document AI", page_icon="🔒", layout="c
 # Fonts are system fonts on purpose: nothing is downloaded from the internet.
 CSS = """
 <style>
-:root{--page:#ECEEF1;--sheet:#FFFFFF;--ink:#1C2733;--muted:#5B6773;--rule:#CDD3DA;--mark:#F7E27A;--blue:#24476B;}
+:root{--page:#E8EBEF;--sheet:#FFFFFF;--ink:#1C2733;--muted:#5B6773;--rule:#C5CCD4;--mark:#F7E27A;--blue:#24476B;}
 #MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"]{display:none !important;}
 [data-testid="stHeader"]{background:transparent;}
 [data-testid="stBottom"] > div{background:var(--page);}
-.block-container{max-width:760px;padding-top:2.2rem;padding-bottom:7rem;}
+.block-container{max-width:780px;padding-top:2.4rem;padding-bottom:7rem;}
 html, body, [data-testid="stAppViewContainer"]{font-family:"Segoe UI",system-ui,sans-serif;color:var(--ink);}
-.app-title{font-family:Georgia,Cambria,"Times New Roman",serif;font-size:2rem;font-weight:600;letter-spacing:-0.01em;margin:0;line-height:1.2;}
-.app-sub{color:var(--muted);font-size:.92rem;margin:.35rem 0 0;}
-.q{font-weight:600;font-size:1.02rem;border-left:3px solid var(--blue);padding:.1rem 0 .1rem .8rem;margin:1.9rem 0 .7rem;}
-.sheet{background:var(--sheet);border:1px solid var(--rule);border-radius:4px;padding:1.2rem 1.5rem;
-  font-family:Georgia,Cambria,"Times New Roman",serif;font-size:1.06rem;line-height:1.7;color:var(--ink);}
+.block-container h1.app-title{font-family:Georgia,Cambria,"Times New Roman",serif !important;font-size:2.3rem !important;
+  font-weight:700 !important;letter-spacing:-0.015em;line-height:1.15 !important;margin:0 !important;padding:0 !important;color:var(--ink);}
+.app-sub{color:var(--muted);font-size:.92rem;margin:.45rem 0 0;}
+.rule{border-bottom:3px double #9AA5B1;margin:.9rem 0 0;}
+.q{font-weight:600;font-size:1.04rem;border-left:3px solid var(--blue);padding:.1rem 0 .1rem .8rem;margin:2rem 0 .8rem;}
+.sheet{background:var(--sheet);border:1px solid var(--rule);border-radius:3px;padding:1.3rem 1.6rem;margin-bottom:.9rem;
+  box-shadow:3px 3px 0 var(--rule);
+  font-family:Georgia,Cambria,"Times New Roman",serif;font-size:1.08rem;line-height:1.72;color:var(--ink);}
 .sheet.muted{color:var(--muted);font-style:italic;}
-.sheet p{margin:0 0 .8rem;}
-.sheet p:last-of-type{margin-bottom:0;}
-.sources{margin-top:1.1rem;padding-top:.8rem;border-top:1px solid var(--rule);
-  font-family:"Segoe UI",system-ui,sans-serif;font-size:.85rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.35rem 1.2rem;align-items:baseline;}
-.sources .lead{color:var(--ink);font-weight:600;}
-.mark{background:linear-gradient(transparent 58%,var(--mark) 58%);color:var(--ink);padding:0 .12rem;}
+.sheet p{margin:0 0 .85rem;}
+.sheet p:last-child{margin-bottom:0;}
+.sheet ul{margin:0 0 .85rem 1.1rem;padding:0;}
+.sheet li{margin-bottom:.3rem;}
+.sheet strong{font-weight:600;background:linear-gradient(transparent 58%,var(--mark) 58%);}
+.mark{background:linear-gradient(transparent 58%,var(--mark) 58%);color:var(--ink);padding:0 .12rem;font-weight:600;}
 .empty{color:var(--muted);margin-top:2.2rem;line-height:1.6;max-width:34rem;}
-.stButton > button{border-radius:4px;border:1px solid var(--rule);background:#fff;font-weight:500;}
-.stButton > button:hover{border-color:var(--blue);color:var(--blue);}
+.stButton > button, [data-testid="stPopoverButton"]{border-radius:4px;border:1px solid var(--rule);background:#fff;font-weight:500;}
+.stButton > button:hover, [data-testid="stPopoverButton"]:hover{border-color:var(--blue);color:var(--blue);}
 .stButton > button[kind="primary"]{background:var(--blue);border-color:var(--blue);color:#fff;}
-[data-testid="stExpander"]{border:none;margin-top:.2rem;}
-[data-testid="stExpander"] summary{font-size:.85rem;color:var(--muted);}
+[data-testid="stPopoverButton"]{min-height:2rem;padding:.1rem .85rem;font-size:.85rem;}
 [data-testid="stChatInput"]{border-radius:4px;}
 </style>
 """
@@ -101,41 +104,64 @@ def documents_dialog():
 
 
 # ---------- HTML helpers ----------
+_BULLET = re.compile(r"^\s*[-*•]\s+")
+
+
+def _inline(s):
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html.escape(s))
+
+
+def _format_block(block):
+    out, bullets, text = [], [], []
+
+    def flush_text():
+        if text:
+            out.append("<p>" + "<br>".join(text) + "</p>")
+            text.clear()
+
+    def flush_bullets():
+        if bullets:
+            out.append("<ul>" + "".join(f"<li>{b}</li>" for b in bullets) + "</ul>")
+            bullets.clear()
+
+    for line in block.split("\n"):
+        if not line.strip():
+            continue
+        if _BULLET.match(line):
+            flush_text()
+            bullets.append(_inline(_BULLET.sub("", line, count=1)))
+        else:
+            flush_bullets()
+            text.append(_inline(line.strip()))
+    flush_text()
+    flush_bullets()
+    return "".join(out)
+
+
 def question_html(q):
     return f'<div class="q">{html.escape(q)}</div>'
 
 
-def sources_html(hits):
-    seen, items = set(), []
+def sheet_html(text, muted=False):
+    body = "".join(_format_block(b) for b in re.split(r"\n\s*\n", text) if b.strip())
+    cls = "sheet muted" if muted else "sheet"
+    return f'<div class="{cls}">{body}</div>'
+
+
+def render_sources(hits):
+    """Sources stay hidden behind one button."""
+    grouped = {}
     for h in hits:
         m = h["meta"]
-        key = (m["source"], m["unit"], m["page"])
-        if key in seen:
-            continue
-        seen.add(key)
-        items.append(
-            f'<span><span class="mark">{html.escape(m["source"])}</span> {m["unit"]} {m["page"]}</span>'
-        )
-    return '<div class="sources"><span class="lead">Sources</span>' + "".join(items) + "</div>"
-
-
-def sheet_html(text, hits=None, muted=False):
-    paras = "".join(
-        f'<p>{html.escape(p.strip()).replace(chr(10), "<br>")}</p>'
-        for p in text.split("\n\n")
-        if p.strip()
-    )
-    cls = "sheet muted" if muted else "sheet"
-    src = sources_html(hits) if hits else ""
-    return f'<div class="{cls}">{paras}{src}</div>'
-
-
-def passages_expander(hits):
-    with st.expander("Show the passages used"):
-        for h in hits:
-            m = h["meta"]
-            st.markdown(f"**{m['source']}, {m['unit']} {m['page']}**")
-            st.caption(h["text"])
+        grouped.setdefault((m["source"], m["unit"], m["page"]), []).append(h["text"])
+    with st.popover(f"Sources ({len(grouped)})"):
+        for (src, unit, page), texts in grouped.items():
+            st.markdown(
+                f'<span class="mark">{html.escape(src)}</span> &nbsp;{unit} {page}',
+                unsafe_allow_html=True,
+            )
+            for t in texts:
+                st.caption(t)
 
 
 # ---------- Header ----------
@@ -155,28 +181,31 @@ with left:
 with right:
     if st.button("Documents", use_container_width=True):
         documents_dialog()
+st.markdown('<div class="rule"></div>', unsafe_allow_html=True)
 
 # ---------- Conversation ----------
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+hint = st.empty()
 if not st.session_state.messages:
     msg = (
-        "Ask a question. The answer is written only from your documents, and the pages it came from are listed underneath."
+        "Ask a question. The answer is written only from your documents, and you can open the sources behind it."
         if sources_now
         else "No documents yet. Open Documents to add a PDF, Word or text file."
     )
-    st.markdown(f'<p class="empty">{msg}</p>', unsafe_allow_html=True)
+    hint.markdown(f'<p class="empty">{msg}</p>', unsafe_allow_html=True)
 
 for m in st.session_state.messages:
     if m["role"] == "user":
         st.markdown(question_html(m["content"]), unsafe_allow_html=True)
     else:
-        st.markdown(sheet_html(m["content"], m.get("hits")), unsafe_allow_html=True)
+        st.markdown(sheet_html(m["content"]), unsafe_allow_html=True)
         if m.get("hits"):
-            passages_expander(m["hits"])
+            render_sources(m["hits"])
 
 if question := st.chat_input("Ask a question about your documents"):
+    hint.empty()
     st.session_state.messages.append({"role": "user", "content": question})
     st.markdown(question_html(question), unsafe_allow_html=True)
 
@@ -195,7 +224,7 @@ if question := st.chat_input("Ask a question about your documents"):
     except Exception:
         text, final_hits = "Could not reach Ollama. Check that it is running, then ask again.", []
 
-    slot.markdown(sheet_html(text, final_hits), unsafe_allow_html=True)
+    slot.markdown(sheet_html(text), unsafe_allow_html=True)
     if final_hits:
-        passages_expander(final_hits)
+        render_sources(final_hits)
     st.session_state.messages.append({"role": "assistant", "content": text, "hits": final_hits})

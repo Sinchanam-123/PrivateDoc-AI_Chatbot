@@ -8,23 +8,27 @@ from ingest import EMBED_MODEL, embed, get_collection
 
 LLM_MODEL = "llama3.2:3b"   # switch to "llama3.2:1b" if the system feels sluggish
 CANDIDATES = 8              # passages fetched from the index
-TOP_K = 4                   # passages given to the model after re-ranking
+TOP_K = 5                   # passages given to the model after re-ranking
 MAX_DISTANCE = 0.60         # cosine distance; lower = stricter
 DISTANCE_MARGIN = 0.12      # drop passages much weaker than the best match
-NUM_CTX = 2048
+NUM_CTX = 3072             # a little more room so fuller answers fit
 KEEP_ALIVE = "15m"
 
 REFUSAL = "I could not find that information in the documents provided."
 
 SYSTEM_PROMPT = (
     "You answer questions using ONLY the context provided. Rules:\n"
-    "1. Combine the facts from every relevant passage into one clear answer.\n"
+    "1. Match the length to the question. A simple fact gets 1 or 2 sentences. "
+    "A broad question (what is X, how does it work, summarise) gets 3 to 6 "
+    "sentences that cover every relevant detail from ALL the passages, merged "
+    "into one smooth explanation rather than separate fragments.\n"
     "2. Copy names, numbers, dates and technical terms exactly as written.\n"
     "3. Never add facts that are not in the context, and never guess.\n"
-    "4. If the context covers only part of the question, answer that part and "
+    "4. Wrap the 2 or 3 most important key terms or facts in **double asterisks**.\n"
+    "5. If the context covers only part of the question, answer that part and "
     "say which part is not covered.\n"
-    "5. Do not mention passages, numbers in brackets, or file names.\n"
-    "6. If the context does not contain the answer, reply exactly: "
+    "6. Do not mention passages, numbers in brackets, or file names.\n"
+    "7. If the context does not contain the answer, reply exactly: "
     + REFUSAL
 )
 
@@ -89,7 +93,7 @@ def stream_answer(messages):
     for part in ollama.chat(
         model=LLM_MODEL,
         messages=messages,
-        options={"num_ctx": NUM_CTX, "temperature": 0, "num_predict": 350},
+        options={"num_ctx": NUM_CTX, "temperature": 0, "num_predict": 450},
         keep_alive=KEEP_ALIVE,
         stream=True,
     ):
