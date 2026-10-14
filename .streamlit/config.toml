@@ -6,10 +6,13 @@ fileWatcherType = "none"
 [browser]
 gatherUsageStats = false
 
+[client]
+toolbarMode = "minimal"
+
 [theme]
 base = "light"
-primaryColor = "#24476B"
-backgroundColor = "#ECEEF1"
-secondaryBackgroundColor = "#FFFFFF"
-textColor = "#1C2733"
+primaryColor = "#2F45D3"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#EEF0FB"
+textColor = "#0F1633"
 font = "sans serif"

@@ -12,33 +12,45 @@ st.set_page_config(page_title="Private Document AI", page_icon="🔒", layout="c
 # Fonts are system fonts on purpose: nothing is downloaded from the internet.
 CSS = """
 <style>
-:root{--page:#E8EBEF;--sheet:#FFFFFF;--ink:#1C2733;--muted:#5B6773;--rule:#C5CCD4;--mark:#F7E27A;--blue:#24476B;}
-#MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"]{display:none !important;}
+:root{--page:#2F45D3;--ink:#0F1633;--muted:#4A5170;--mark:#FFE45C;}
+#MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"], [data-testid="stStatusWidget"]{display:none !important;}
+.stApp, [data-testid="stAppViewContainer"]{background:var(--page);}
 [data-testid="stHeader"]{background:transparent;}
-[data-testid="stBottom"] > div{background:var(--page);}
+[data-testid="stBottom"], [data-testid="stBottom"] > div{background:var(--page);}
 .block-container{max-width:780px;padding-top:2.4rem;padding-bottom:7rem;}
 html, body, [data-testid="stAppViewContainer"]{font-family:"Segoe UI",system-ui,sans-serif;color:var(--ink);}
-.block-container h1.app-title{font-family:Georgia,Cambria,"Times New Roman",serif !important;font-size:2.3rem !important;
-  font-weight:700 !important;letter-spacing:-0.015em;line-height:1.15 !important;margin:0 !important;padding:0 !important;color:var(--ink);}
-.app-sub{color:var(--muted);font-size:.92rem;margin:.45rem 0 0;}
-.rule{border-bottom:3px double #9AA5B1;margin:.9rem 0 0;}
-.q{font-weight:600;font-size:1.04rem;border-left:3px solid var(--blue);padding:.1rem 0 .1rem .8rem;margin:2rem 0 .8rem;}
-.sheet{background:var(--sheet);border:1px solid var(--rule);border-radius:3px;padding:1.3rem 1.6rem;margin-bottom:.9rem;
-  box-shadow:3px 3px 0 var(--rule);
-  font-family:Georgia,Cambria,"Times New Roman",serif;font-size:1.08rem;line-height:1.72;color:var(--ink);}
+::selection{background:var(--mark);color:var(--ink);}
+
+.block-container h1.app-title{font-family:Georgia,Cambria,"Times New Roman",serif !important;font-size:2.6rem !important;
+  font-weight:700 !important;letter-spacing:-0.015em;line-height:1.12 !important;margin:0 !important;padding:0 !important;color:#fff !important;}
+.app-sub{color:rgba(255,255,255,.84);font-size:.93rem;margin:.5rem 0 0;}
+.rule{border-bottom:3px double rgba(255,255,255,.55);margin:1rem 0 0;}
+
+.q{display:block;width:fit-content;max-width:85%;margin:2.1rem 0 1.1rem auto;background:var(--mark);color:var(--ink);
+  font-weight:600;font-size:1.02rem;padding:.55rem .95rem;border:2px solid var(--ink);border-radius:4px;box-shadow:3px 3px 0 var(--ink);}
+.sheet{background:#fff;border:2px solid var(--ink);border-radius:4px;padding:1.3rem 1.6rem;margin-bottom:1.2rem;
+  box-shadow:5px 5px 0 var(--ink);font-family:Georgia,Cambria,"Times New Roman",serif;font-size:1.08rem;line-height:1.72;color:var(--ink);}
 .sheet.muted{color:var(--muted);font-style:italic;}
 .sheet p{margin:0 0 .85rem;}
 .sheet p:last-child{margin-bottom:0;}
 .sheet ul{margin:0 0 .85rem 1.1rem;padding:0;}
 .sheet li{margin-bottom:.3rem;}
-.sheet strong{font-weight:600;background:linear-gradient(transparent 58%,var(--mark) 58%);}
-.mark{background:linear-gradient(transparent 58%,var(--mark) 58%);color:var(--ink);padding:0 .12rem;font-weight:600;}
-.empty{color:var(--muted);margin-top:2.2rem;line-height:1.6;max-width:34rem;}
-.stButton > button, [data-testid="stPopoverButton"]{border-radius:4px;border:1px solid var(--rule);background:#fff;font-weight:500;}
-.stButton > button:hover, [data-testid="stPopoverButton"]:hover{border-color:var(--blue);color:var(--blue);}
-.stButton > button[kind="primary"]{background:var(--blue);border-color:var(--blue);color:#fff;}
-[data-testid="stPopoverButton"]{min-height:2rem;padding:.1rem .85rem;font-size:.85rem;}
-[data-testid="stChatInput"]{border-radius:4px;}
+.sheet strong{font-weight:600;background:linear-gradient(transparent 55%,var(--mark) 55%);}
+.mark{background:linear-gradient(transparent 55%,var(--mark) 55%);color:var(--ink);padding:0 .12rem;font-weight:600;}
+.empty{color:rgba(255,255,255,.88);margin-top:2.4rem;line-height:1.65;max-width:34rem;font-size:1.02rem;}
+
+.stButton > button, [data-testid="stPopoverButton"]{background:#fff;color:var(--ink);font-weight:600;border:2px solid var(--ink);
+  border-radius:4px;box-shadow:3px 3px 0 var(--ink);transition:transform .08s, box-shadow .08s;}
+.stButton > button:hover, [data-testid="stPopoverButton"]:hover{background:#fff;color:var(--ink);border-color:var(--ink);
+  transform:translate(-1px,-1px);box-shadow:4px 4px 0 var(--ink);}
+.stButton > button:active, [data-testid="stPopoverButton"]:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink);}
+.stButton > button[kind="primary"], [data-testid="stBaseButton-primary"]{background:var(--mark);color:var(--ink);border:2px solid var(--ink);}
+[data-testid="stPopoverButton"]{min-height:2.1rem;padding:.1rem .9rem;font-size:.88rem;}
+[data-testid="stPopoverBody"]{border:2px solid var(--ink);border-radius:4px;}
+div[role="dialog"]{border:2px solid var(--ink);border-radius:6px;}
+
+[data-testid="stChatInput"]{background:#fff;border:2px solid var(--ink);border-radius:4px;box-shadow:4px 4px 0 var(--ink);}
+[data-testid="stChatInput"] > div{border:none !important;box-shadow:none !important;}
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
