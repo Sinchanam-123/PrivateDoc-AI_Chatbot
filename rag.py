@@ -9,7 +9,8 @@ from ingest import EMBED_MODEL, embed, get_collection
 LLM_MODEL = "llama3.2:3b"   # switch to "llama3.2:1b" if the system feels sluggish
 CANDIDATES = 8              # passages fetched from the index
 TOP_K = 5                   # passages given to the model after re-ranking
-MAX_DISTANCE = 0.60         # cosine distance; lower = stricter
+MAX_DISTANCE = 0.55         # cosine distance; lower = stricter
+STRONG_DISTANCE = 0.40      # closer than this = accepted on meaning alone
 DISTANCE_MARGIN = 0.12      # drop passages much weaker than the best match
 NUM_CTX = 3072             # a little more room so fuller answers fit
 KEEP_ALIVE = "15m"
@@ -18,31 +19,39 @@ REFUSAL = "I could not find that information in the documents provided."
 
 SYSTEM_PROMPT = (
     "You answer questions using ONLY the context provided. Rules:\n"
-    "1. Match the length to the question. A simple fact gets 1 or 2 sentences. "
-    "A broad question (what is X, how does it work, summarise) gets 3 to 6 "
-    "sentences that cover every relevant detail from ALL the passages, merged "
-    "into one smooth explanation rather than separate fragments.\n"
-    "2. Copy names, numbers, dates and technical terms exactly as written.\n"
-    "3. Never add facts that are not in the context, and never guess.\n"
-    "4. Wrap the 2 or 3 most important key terms or facts in **double asterisks**.\n"
-    "5. If the context covers only part of the question, answer that part and "
-    "say which part is not covered.\n"
-    "6. Do not mention passages, numbers in brackets, or file names.\n"
-    "7. If the context does not contain the answer, reply exactly: "
-    + REFUSAL
+    "1. First decide whether the context directly answers the question that was "
+    "asked. If it does not (for example the question is general knowledge, or "
+    "about something the context never discusses), reply with exactly this "
+    "sentence and nothing else: " + REFUSAL + "\n"
+    "2. Never answer a different question than the one asked, and never add "
+    "loosely related facts.\n"
+    "3. Match the length to the question. A simple fact (a colour, a name, a "
+    "folder) gets 1 or 2 sentences. A broad question such as 'what is X', 'how "
+    "does it work' or 'summarise' must get 3 to 5 sentences: say what it is, "
+    "what it is for, and how it works, using every relevant passage and merging "
+    "them into one smooth explanation.\n"
+    "4. Copy names, numbers, dates and technical terms exactly as written.\n"
+    "5. Never add facts that are not in the context, and never guess.\n"
+    "6. Wrap the 2 or 3 most important key terms or facts in **double asterisks**.\n"
+    "7. If the context covers only part of the question, answer that part and add "
+    "one sentence saying what is not covered. Do not use the exact sentence from "
+    "rule 1 in that case.\n"
+    "8. Do not mention passages, numbers in brackets, or file names."
 )
 
 _STOP = {
-    "the", "and", "for", "are", "was", "were", "what", "which", "who", "whom",
-    "how", "why", "when", "where", "does", "did", "can", "could", "should",
-    "would", "this", "that", "these", "those", "with", "from", "about", "into",
-    "your", "you", "its", "has", "have", "had", "not", "any", "all", "tell",
-    "give", "explain", "describe",
+    "the", "and", "for", "are", "was", "were", "what", "whats", "which", "who",
+    "whom", "how", "why", "when", "where", "does", "did", "can", "could",
+    "should", "would", "this", "that", "these", "those", "with", "from",
+    "about", "into", "your", "you", "its", "has", "have", "had", "not", "any",
+    "all", "tell", "give", "explain", "describe", "is", "of", "to", "in", "on",
+    "my", "me", "it", "an", "as", "at", "be", "by", "do", "if", "or", "so",
+    "we", "us", "up", "no", "am", "he",
 }
 
 
 def _keywords(text: str):
-    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 2 and w not in _STOP}
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) >= 2 and w not in _STOP}
 
 
 def retrieve(question: str):
@@ -61,9 +70,12 @@ def retrieve(question: str):
     for doc, meta, dist in zip(
         res["documents"][0], res["metadatas"][0], res["distances"][0]
     ):
-        if dist > MAX_DISTANCE:  # evidence check
+        if dist > MAX_DISTANCE:  # evidence check 1: close enough in meaning
             continue
         overlap = len(q_words & _keywords(doc)) / len(q_words) if q_words else 0.0
+        # evidence check 2: a weaker match must also share a keyword with the question
+        if q_words and dist > STRONG_DISTANCE and overlap == 0:
+            continue
         hits.append(
             {"text": doc, "meta": meta, "distance": dist, "score": (1 - dist) + 0.3 * overlap}
         )
@@ -103,7 +115,11 @@ def stream_answer(messages):
 def finalize(text: str, hits):
     """Clean up the model output. Returns (text, hits_to_cite)."""
     text = text.strip()
-    if not re.search(r"[A-Za-z]{3,}", text) or text.lower().startswith("i could not find"):
+    if (
+        not re.search(r"[A-Za-z]{3,}", text)
+        or REFUSAL.lower() in text.lower()
+        or text.lower().startswith("i could not find")
+    ):
         return REFUSAL, []
     return text, hits
 

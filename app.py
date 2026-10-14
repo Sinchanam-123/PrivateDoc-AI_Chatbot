@@ -165,15 +165,15 @@ def render_sources(hits):
     grouped = {}
     for h in hits:
         m = h["meta"]
-        grouped.setdefault((m["source"], m["unit"], m["page"]), []).append(h["text"])
+        grouped.setdefault((m["source"], m["unit"], m["page"]), []).append((h["text"], h["distance"]))
     with st.popover(f"Sources ({len(grouped)})"):
         for (src, unit, page), texts in grouped.items():
             st.markdown(
                 f'<span class="mark">{html.escape(src)}</span> &nbsp;{unit} {page}',
                 unsafe_allow_html=True,
             )
-            for t in texts:
-                st.caption(t)
+            for passage, dist in texts:
+                st.caption(f"Match {round((1 - dist) * 100)}%: {passage}")
 
 
 # ---------- Header ----------
