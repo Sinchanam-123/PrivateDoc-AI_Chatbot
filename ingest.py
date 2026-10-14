@@ -109,7 +109,7 @@ def index_file(path: Path) -> int:
     if not docs:
         return 0  # e.g. a scanned PDF with no extractable text
 
-    vectors = embed(docs, "search_document: ")
+    vectors = embed([f"{path.stem}: {d}" for d in docs], "search_document: ")
     for i in range(0, len(docs), 64):
         collection.add(
             ids=ids[i:i + 64],
@@ -130,6 +130,17 @@ def delete_source(name: str):
     f = DOCS_DIR / name
     if f.exists():
         f.unlink()
+
+
+def reindex_all(progress=None) -> int:
+    """Rebuild the index from every file saved in data/docs."""
+    files = [f for f in sorted(DOCS_DIR.glob("*")) if f.suffix.lower() in SUPPORTED]
+    total = 0
+    for i, f in enumerate(files, 1):
+        total += index_file(f)
+        if progress:
+            progress(i, len(files), f.name)
+    return total
 
 
 if __name__ == "__main__":

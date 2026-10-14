@@ -1,4 +1,4 @@
-"""rag.py - retrieve chunks, check evidence, generate a grounded answer locally."""
+"""rag.py - retrieve, re-rank, check evidence, generate a grounded answer locally."""
 import re
 import threading
 
@@ -7,73 +7,106 @@ import ollama
 from ingest import EMBED_MODEL, embed, get_collection
 
 LLM_MODEL = "llama3.2:3b"   # switch to "llama3.2:1b" if the system feels sluggish
-TOP_K = 4
-MAX_DISTANCE = 0.60         # cosine distance; lower = stricter. Tune after testing.
+CANDIDATES = 8              # passages fetched from the index
+TOP_K = 4                   # passages given to the model after re-ranking
+MAX_DISTANCE = 0.60         # cosine distance; lower = stricter
+DISTANCE_MARGIN = 0.12      # drop passages much weaker than the best match
 NUM_CTX = 2048
-KEEP_ALIVE = "15m"          # model unloads from memory after 15 idle minutes
+KEEP_ALIVE = "15m"
 
-REFUSAL = (
-    "I could not find that information in the documents provided."
-)
+REFUSAL = "I could not find that information in the documents provided."
 
 SYSTEM_PROMPT = (
-    "You are a helpful assistant answering questions from the user's documents. "
-    "Combine the relevant information from ALL of the context passages into one "
-    "clear, well-written answer of 2 to 5 sentences. Use only the context and "
-    "never outside knowledge. Do not mention passages, numbers, or file names. "
-    "If the context does not contain the answer, reply exactly: "
-    "I could not find that information in the documents provided."
+    "You answer questions using ONLY the context provided. Rules:\n"
+    "1. Combine the facts from every relevant passage into one clear answer.\n"
+    "2. Copy names, numbers, dates and technical terms exactly as written.\n"
+    "3. Never add facts that are not in the context, and never guess.\n"
+    "4. If the context covers only part of the question, answer that part and "
+    "say which part is not covered.\n"
+    "5. Do not mention passages, numbers in brackets, or file names.\n"
+    "6. If the context does not contain the answer, reply exactly: "
+    + REFUSAL
 )
+
+_STOP = {
+    "the", "and", "for", "are", "was", "were", "what", "which", "who", "whom",
+    "how", "why", "when", "where", "does", "did", "can", "could", "should",
+    "would", "this", "that", "these", "those", "with", "from", "about", "into",
+    "your", "you", "its", "has", "have", "had", "not", "any", "all", "tell",
+    "give", "explain", "describe",
+}
+
+
+def _keywords(text: str):
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 2 and w not in _STOP}
 
 
 def retrieve(question: str):
     collection = get_collection()
-    if collection.count() == 0:
+    n = collection.count()
+    if n == 0:
         return []
     qvec = embed([question], "search_query: ")[0]
     res = collection.query(
         query_embeddings=[qvec],
-        n_results=min(TOP_K, collection.count()),
+        n_results=min(CANDIDATES, n),
         include=["documents", "metadatas", "distances"],
     )
+    q_words = _keywords(question)
     hits = []
     for doc, meta, dist in zip(
         res["documents"][0], res["metadatas"][0], res["distances"][0]
     ):
-        if dist <= MAX_DISTANCE:  # evidence check
-            hits.append({"text": doc, "meta": meta, "distance": dist})
-    return hits
+        if dist > MAX_DISTANCE:  # evidence check
+            continue
+        overlap = len(q_words & _keywords(doc)) / len(q_words) if q_words else 0.0
+        hits.append(
+            {"text": doc, "meta": meta, "distance": dist, "score": (1 - dist) + 0.3 * overlap}
+        )
+    if not hits:
+        return []
+    best = min(h["distance"] for h in hits)
+    hits = [h for h in hits if h["distance"] <= best + DISTANCE_MARGIN]
+    hits.sort(key=lambda h: h["score"], reverse=True)  # vector + keyword re-rank
+    return hits[:TOP_K]
 
 
-def answer(question: str):
-    """Return (answer_text, hits). hits is empty when we refuse."""
+def prepare(question: str):
+    """Return (hits, messages). messages is None when there is no evidence."""
     hits = retrieve(question)
     if not hits:
-        return REFUSAL, []
+        return [], None
+    context = "\n\n---\n\n".join(h["text"] for h in hits)
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"},
+    ]
+    return hits, messages
 
-    context = "\n\n".join(h["text"] for h in hits)
-    response = ollama.chat(
+
+def stream_answer(messages):
+    """Yield the answer piece by piece."""
+    for part in ollama.chat(
         model=LLM_MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:",
-            },
-        ],
-        options={"num_ctx": NUM_CTX, "temperature": 0.1, "num_predict": 300},
+        messages=messages,
+        options={"num_ctx": NUM_CTX, "temperature": 0, "num_predict": 350},
         keep_alive=KEEP_ALIVE,
-    )
-    text = response["message"]["content"].strip()
+        stream=True,
+    ):
+        yield part["message"]["content"]
 
-    if not re.search(r"[A-Za-z]{3,}", text):  # e.g. just "[2]"
-        return REFUSAL, hits
+
+def finalize(text: str, hits):
+    """Clean up the model output. Returns (text, hits_to_cite)."""
+    text = text.strip()
+    if not re.search(r"[A-Za-z]{3,}", text) or text.lower().startswith("i could not find"):
+        return REFUSAL, []
     return text, hits
 
 
 def unload_models():
     """Free RAM/VRAM immediately."""
-    for model in (LLM_MODEL, "nomic-embed-text"):
+    for model in (LLM_MODEL, EMBED_MODEL):
         try:
             if model == LLM_MODEL:
                 ollama.generate(model=model, prompt="", keep_alive=0)
