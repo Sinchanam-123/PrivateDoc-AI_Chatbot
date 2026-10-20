@@ -1,10 +1,13 @@
 """app.py - Streamlit interface for Private Document AI (localhost only)."""
 import html
 import re
+import time
 
 import streamlit as st
 
+from checks import run_checks
 from ingest import DOCS_DIR, SUPPORTED, delete_source, index_file, list_sources, reindex_all
+from qlog import log_query
 from rag import REFUSAL, finalize, prepare, stream_answer, unload_models, warm_up
 
 st.set_page_config(page_title="Private Document AI", page_icon="🔒", layout="centered")
@@ -176,6 +179,27 @@ def render_sources(hits):
                 st.caption(f"Match {round((1 - dist) * 100)}%: {passage}")
 
 
+# ---------- Start-up checks ----------
+@st.cache_data(ttl=5, show_spinner=False)
+def cached_checks():
+    return run_checks()
+
+
+problems = cached_checks()
+if problems:
+    st.markdown('<h1 class="app-title">Private Document AI</h1><div class="rule"></div>', unsafe_allow_html=True)
+    st.write("")
+    for p in problems:
+        fix = html.escape(p["fix"]).replace("\n", "<br>")
+        st.markdown(
+            f'<div class="sheet"><p><strong>{html.escape(p["title"])}</strong></p><p>{fix}</p></div>',
+            unsafe_allow_html=True,
+        )
+    if st.button("Check again"):
+        cached_checks.clear()
+        st.rerun()
+    st.stop()
+
 # ---------- Header ----------
 sources_now = cached_sources()
 left, right = st.columns([4, 1], vertical_alignment="center")
@@ -223,8 +247,10 @@ if question := st.chat_input("Ask a question about your documents"):
 
     slot = st.empty()
     slot.markdown(sheet_html("Searching your documents...", muted=True), unsafe_allow_html=True)
+    started = time.time()
+    trace = []
     try:
-        hits, messages = prepare(question)
+        hits, messages, trace = prepare(question)
         if messages is None:
             text, final_hits = REFUSAL, []
         else:
@@ -236,6 +262,7 @@ if question := st.chat_input("Ask a question about your documents"):
     except Exception:
         text, final_hits = "Could not reach Ollama. Check that it is running, then ask again.", []
 
+    log_query(question, trace, refused=not final_hits, seconds=time.time() - started)
     slot.markdown(sheet_html(text), unsafe_allow_html=True)
     if final_hits:
         render_sources(final_hits)

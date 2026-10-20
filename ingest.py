@@ -3,19 +3,25 @@ import re
 from pathlib import Path
 
 import chromadb
-import fitz  # PyMuPDF
+try:
+    import pymupdf as fitz  # PyMuPDF (new name)
+except ImportError:  # older installs
+    import fitz
 import ollama
 from chromadb.config import Settings
 from docx import Document
+
+from settings import cfg
 
 BASE = Path(__file__).parent
 DOCS_DIR = BASE / "data" / "docs"
 CHROMA_DIR = BASE / "data" / "chroma"
 
-EMBED_MODEL = "nomic-embed-text"
-CHUNK_SIZE = 800      # characters per chunk (small, to fit a 2048-token context)
-OVERLAP = 100         # characters shared between neighbouring chunks
-SECTION_CHARS = 3000  # DOCX/TXT have no real pages, so we make "sections"
+# Values come from settings.ini
+EMBED_MODEL = cfg.embed_model
+CHUNK_SIZE = cfg.chunk_size
+OVERLAP = cfg.chunk_overlap
+SECTION_CHARS = cfg.section_chars  # DOCX/TXT have no real pages, so we make "sections"
 
 SUPPORTED = {".pdf", ".docx", ".txt"}
 
@@ -79,7 +85,13 @@ def chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = OVERLAP):
             chunks.append(piece)
         if end >= len(text):
             break
-        start = max(end - overlap, start + 1)
+        next_start = max(end - overlap, start + 1)
+        # start the next chunk at a word boundary, not in the middle of a word
+        if text[next_start - 1] != " ":
+            space = text.find(" ", next_start, end)
+            if space != -1:
+                next_start = space + 1
+        start = next_start
     return chunks
 
 

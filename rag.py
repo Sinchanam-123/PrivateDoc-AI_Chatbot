@@ -5,15 +5,10 @@ import threading
 import ollama
 
 from ingest import EMBED_MODEL, embed, get_collection
+from settings import cfg
 
-LLM_MODEL = "llama3.2:3b"   # switch to "llama3.2:1b" if the system feels sluggish
-CANDIDATES = 8              # passages fetched from the index
-TOP_K = 5                   # passages given to the model after re-ranking
-MAX_DISTANCE = 0.55         # cosine distance; lower = stricter
-STRONG_DISTANCE = 0.40      # closer than this = accepted on meaning alone
-DISTANCE_MARGIN = 0.12      # drop passages much weaker than the best match
-NUM_CTX = 3072             # a little more room so fuller answers fit
-KEEP_ALIVE = "15m"
+LLM_MODEL = cfg.llm_model
+KEEP_ALIVE = cfg.keep_alive
 
 REFUSAL = "I could not find that information in the documents provided."
 
@@ -54,50 +49,75 @@ def _keywords(text: str):
     return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) >= 2 and w not in _STOP}
 
 
-def retrieve(question: str):
+def select_hits(question, docs, metas, dists, s=cfg):
+    """Apply the evidence checks and re-ranking to raw search results.
+
+    Returns (hits, trace). `trace` has one entry per candidate saying what
+    happened to it, which is written to the log to help with tuning.
+    """
+    q_words = _keywords(question)
+    trace, pool = [], []
+    for doc, meta, dist in zip(docs, metas, dists):
+        overlap = len(q_words & _keywords(doc)) / len(q_words) if q_words else 0.0
+        entry = {
+            "source": meta.get("source"), "page": meta.get("page"),
+            "distance": round(dist, 4), "overlap": round(overlap, 3), "decision": "kept",
+        }
+        trace.append(entry)
+        if dist > s.max_distance:                       # check 1: close in meaning
+            entry["decision"] = "too_far"
+            continue
+        if q_words and dist > s.strong_distance and overlap == 0:  # check 2: share a keyword
+            entry["decision"] = "no_keyword"
+            continue
+        hit = {"text": doc, "meta": meta, "distance": dist,
+               "score": (1 - dist) + s.keyword_weight * overlap}
+        pool.append((entry, hit))
+    if not pool:
+        return [], trace
+
+    best = min(h["distance"] for _, h in pool)
+    kept = []
+    for entry, hit in pool:                             # check 3: not much weaker than the best
+        if hit["distance"] > best + s.distance_margin:
+            entry["decision"] = "weak_vs_best"
+        else:
+            kept.append((entry, hit))
+    kept.sort(key=lambda eh: eh[1]["score"], reverse=True)
+    for entry, _ in kept[s.top_k:]:
+        entry["decision"] = "below_top_k"
+    return [h for _, h in kept[:s.top_k]], trace
+
+
+def retrieve_with_trace(question: str):
     collection = get_collection()
     n = collection.count()
     if n == 0:
-        return []
+        return [], []
     qvec = embed([question], "search_query: ")[0]
     res = collection.query(
         query_embeddings=[qvec],
-        n_results=min(CANDIDATES, n),
+        n_results=min(cfg.candidates, n),
         include=["documents", "metadatas", "distances"],
     )
-    q_words = _keywords(question)
-    hits = []
-    for doc, meta, dist in zip(
-        res["documents"][0], res["metadatas"][0], res["distances"][0]
-    ):
-        if dist > MAX_DISTANCE:  # evidence check 1: close enough in meaning
-            continue
-        overlap = len(q_words & _keywords(doc)) / len(q_words) if q_words else 0.0
-        # evidence check 2: a weaker match must also share a keyword with the question
-        if q_words and dist > STRONG_DISTANCE and overlap == 0:
-            continue
-        hits.append(
-            {"text": doc, "meta": meta, "distance": dist, "score": (1 - dist) + 0.3 * overlap}
-        )
-    if not hits:
-        return []
-    best = min(h["distance"] for h in hits)
-    hits = [h for h in hits if h["distance"] <= best + DISTANCE_MARGIN]
-    hits.sort(key=lambda h: h["score"], reverse=True)  # vector + keyword re-rank
-    return hits[:TOP_K]
+    return select_hits(question, res["documents"][0], res["metadatas"][0], res["distances"][0])
+
+
+def retrieve(question: str):
+    return retrieve_with_trace(question)[0]
 
 
 def prepare(question: str):
-    """Return (hits, messages). messages is None when there is no evidence."""
-    hits = retrieve(question)
+    """Return (hits, messages, trace). messages is None when there is no evidence."""
+    hits, trace = retrieve_with_trace(question)
     if not hits:
-        return [], None
+        return [], None, trace
     context = "\n\n---\n\n".join(h["text"] for h in hits)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"},
     ]
-    return hits, messages
+    return hits, messages, trace
 
 
 def stream_answer(messages):
@@ -105,7 +125,8 @@ def stream_answer(messages):
     for part in ollama.chat(
         model=LLM_MODEL,
         messages=messages,
-        options={"num_ctx": NUM_CTX, "temperature": 0, "num_predict": 450},
+        options={"num_ctx": cfg.context_tokens, "temperature": cfg.temperature,
+                 "num_predict": cfg.max_answer_tokens},
         keep_alive=KEEP_ALIVE,
         stream=True,
     ):
