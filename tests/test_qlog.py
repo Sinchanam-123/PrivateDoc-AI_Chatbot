@@ -43,3 +43,25 @@ def test_logging_failure_never_raises(tmp_path):
     blocker = tmp_path / "file"
     blocker.write_text("x")
     qlog.log_query("q", TRACE, False, 1, path=blocker / "sub" / "q.jsonl", s=S)  # parent is a file
+
+
+# ---------- feedback ----------
+def test_feedback_is_saved(tmp_path):
+    f = tmp_path / "fb.jsonl"
+    qlog.log_feedback("up", "what is x?", "It is y.", [{"source": "a.txt", "page": 1}], False, path=f, s=S)
+    qlog.log_feedback("down", "q2", "a2", [], True, path=f, s=S)
+    rows = qlog.read_feedback(f)
+    assert [r["verdict"] for r in rows] == ["up", "down"]
+    assert rows[0]["question"] == "what is x?" and rows[0]["sources"][0]["source"] == "a.txt"
+    assert rows[1]["refused"] is True
+
+
+def test_feedback_ignores_bad_verdicts_and_respects_privacy(tmp_path):
+    f = tmp_path / "fb.jsonl"
+    qlog.log_feedback("sideways", "q", "a", [], False, path=f, s=S)
+    assert not f.exists()
+    qlog.log_feedback("up", "secret q", "secret a", [], False, path=f, s=replace(S, log_questions=False))
+    text = f.read_text()
+    assert "secret" not in text
+    qlog.log_feedback("up", "q", "a", [], False, path=tmp_path / "off.jsonl", s=replace(S, logging_enabled=False))
+    assert not (tmp_path / "off.jsonl").exists()

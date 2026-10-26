@@ -16,4 +16,4 @@ for e in entries:
     print(f"\n{e['time']}  [{status}]  {e['seconds']}s  model={e['model']}")
     print(f"Q: {e['question']}")
     for c in e["candidates"]:
-        print(f"   dist {c['distance']:.3f}  keywords {c['overlap']:.2f}  {c['decision']:<13} {c['source']} ({c['page']})")
+        print(f"   dist {c.get('distance', 0):.3f}  keywords {c.get('overlap', 0):.2f}  {c.get('decision', ''):<22} {c.get('source')} ({c.get('page')})")

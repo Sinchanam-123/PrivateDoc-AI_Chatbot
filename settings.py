@@ -22,6 +22,8 @@ class Settings:
     strong_distance: float = 0.40
     distance_margin: float = 0.12
     keyword_weight: float = 0.3
+    hybrid_search: bool = True
+    lexical_candidates: int = 5
     # generation
     context_tokens: int = 3072
     max_answer_tokens: int = 450
@@ -30,6 +32,9 @@ class Settings:
     # logging
     logging_enabled: bool = True
     log_questions: bool = True
+    # safety
+    sanitize_passages: bool = True
+    block_override_requests: bool = True
     # problems found while reading the file (shown at start-up)
     warnings: tuple = ()
 
@@ -47,12 +52,16 @@ _SECTIONS = {
     "strong_distance": ("retrieval", "strong_distance"),
     "distance_margin": ("retrieval", "distance_margin"),
     "keyword_weight": ("retrieval", "keyword_weight"),
+    "hybrid_search": ("retrieval", "hybrid_search"),
+    "lexical_candidates": ("retrieval", "lexical_candidates"),
     "context_tokens": ("generation", "context_tokens"),
     "max_answer_tokens": ("generation", "max_answer_tokens"),
     "temperature": ("generation", "temperature"),
     "keep_alive": ("generation", "keep_alive"),
     "logging_enabled": ("logging", "enabled"),
     "log_questions": ("logging", "log_questions"),
+    "sanitize_passages": ("safety", "sanitize_passages"),
+    "block_override_requests": ("safety", "block_override_requests"),
 }
 
 

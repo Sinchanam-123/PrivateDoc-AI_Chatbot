@@ -5,3 +5,6 @@ data/
 logs/
 .pytest_cache/
 .env
+evaluation/results/
+evaluation/candidates.csv
+*.zip

@@ -7,7 +7,7 @@ import streamlit as st
 
 from checks import run_checks
 from ingest import DOCS_DIR, SUPPORTED, delete_source, index_file, list_sources, reindex_all
-from qlog import log_query
+from qlog import log_feedback, log_query
 from rag import REFUSAL, finalize, prepare, stream_answer, unload_models, warm_up
 
 st.set_page_config(page_title="Private Document AI", page_icon="🔒", layout="centered")
@@ -179,6 +179,32 @@ def render_sources(hits):
                 st.caption(f"Match {round((1 - dist) * 100)}%: {passage}")
 
 
+def give_feedback(index, verdict):
+    m = st.session_state.messages[index]
+    m["feedback"] = verdict
+    sources = [
+        {"source": h["meta"]["source"], "page": h["meta"]["page"]} for h in (m.get("hits") or [])
+    ]
+    log_feedback(verdict, m.get("question"), m["content"], sources, refused=not m.get("hits"))
+
+
+def render_actions(index, m):
+    """Sources button plus thumbs up/down under an answer."""
+    if m.get("error"):
+        return
+    c1, c2, c3, c4 = st.columns([1.7, 0.6, 0.6, 5], vertical_alignment="center")
+    with c1:
+        if m.get("hits"):
+            render_sources(m["hits"])
+    done = m.get("feedback")
+    c2.button("👍", key=f"up_{index}", help="Good answer", disabled=bool(done),
+              on_click=give_feedback, args=(index, "up"))
+    c3.button("👎", key=f"down_{index}", help="Wrong or unhelpful", disabled=bool(done),
+              on_click=give_feedback, args=(index, "down"))
+    if done:
+        c4.caption("Thanks. Saved in your local feedback log.")
+
+
 # ---------- Start-up checks ----------
 @st.cache_data(ttl=5, show_spinner=False)
 def cached_checks():
@@ -232,13 +258,12 @@ if not st.session_state.messages:
     )
     hint.markdown(f'<p class="empty">{msg}</p>', unsafe_allow_html=True)
 
-for m in st.session_state.messages:
+for i, m in enumerate(st.session_state.messages):
     if m["role"] == "user":
         st.markdown(question_html(m["content"]), unsafe_allow_html=True)
     else:
         st.markdown(sheet_html(m["content"]), unsafe_allow_html=True)
-        if m.get("hits"):
-            render_sources(m["hits"])
+        render_actions(i, m)
 
 if question := st.chat_input("Ask a question about your documents"):
     hint.empty()
@@ -249,6 +274,7 @@ if question := st.chat_input("Ask a question about your documents"):
     slot.markdown(sheet_html("Searching your documents...", muted=True), unsafe_allow_html=True)
     started = time.time()
     trace = []
+    failed = False
     try:
         hits, messages, trace = prepare(question)
         if messages is None:
@@ -260,10 +286,11 @@ if question := st.chat_input("Ask a question about your documents"):
                 slot.markdown(sheet_html(acc + " ▍"), unsafe_allow_html=True)
             text, final_hits = finalize(acc, hits)
     except Exception:
+        failed = True
         text, final_hits = "Could not reach Ollama. Check that it is running, then ask again.", []
 
     log_query(question, trace, refused=not final_hits, seconds=time.time() - started)
-    slot.markdown(sheet_html(text), unsafe_allow_html=True)
-    if final_hits:
-        render_sources(final_hits)
-    st.session_state.messages.append({"role": "assistant", "content": text, "hits": final_hits})
+    st.session_state.messages.append(
+        {"role": "assistant", "content": text, "hits": final_hits, "question": question, "error": failed}
+    )
+    st.rerun()  # redraw the conversation so the answer gets its Sources and feedback buttons

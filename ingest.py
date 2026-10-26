@@ -23,6 +23,8 @@ CHUNK_SIZE = cfg.chunk_size
 OVERLAP = cfg.chunk_overlap
 SECTION_CHARS = cfg.section_chars  # DOCX/TXT have no real pages, so we make "sections"
 
+INDEX_VERSION = 0  # bumped whenever the index changes (lets rag.py rebuild its word index)
+
 SUPPORTED = {".pdf", ".docx", ".txt"}
 
 
@@ -106,6 +108,8 @@ def embed(texts, prefix: str):
 
 def index_file(path: Path) -> int:
     """Index one file (replacing any older version). Returns number of chunks."""
+    global INDEX_VERSION
+    INDEX_VERSION += 1
     path = Path(path)
     collection = get_collection()
     collection.delete(where={"source": path.name})
@@ -138,6 +142,8 @@ def list_sources():
 
 
 def delete_source(name: str):
+    global INDEX_VERSION
+    INDEX_VERSION += 1
     get_collection().delete(where={"source": name})
     f = DOCS_DIR / name
     if f.exists():

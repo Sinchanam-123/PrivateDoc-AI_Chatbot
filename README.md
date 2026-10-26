@@ -23,7 +23,7 @@ ollama pull nomic-embed-text
 # 2. Create the project environment
 python -m venv venv
 .\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` first. It affects only the current window.
@@ -32,11 +32,11 @@ If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process -Execut
 
 Double-click **`start.bat`**. It activates the environment, starts Ollama if needed, and opens http://127.0.0.1:8501. Close the window to stop the app.
 
-Manual alternative:
+Manual alternative (these use `python -m` so they also work on laptops where Windows blocks the `pip.exe` and `streamlit.exe` launchers):
 
 ```powershell
 .\venv\Scripts\Activate.ps1
-streamlit run app.py
+python -m streamlit run app.py
 ```
 
 ## Use
@@ -59,6 +59,8 @@ Common changes:
 | Good questions get refused | raise `max_distance` (for example 0.60) |
 | Unrelated questions get answered | lower `strong_distance` (for example 0.35) |
 | Shorter or longer answers | `max_answer_tokens` |
+| A document has the exact words but is not found | keep `hybrid_search = true` (word search runs next to meaning search) |
+| Test whether the injection defences matter | set `sanitize_passages` or `block_override_requests` to `false`, rerun `python evaluate.py` |
 
 ## Start-up checks
 
@@ -75,20 +77,39 @@ python view_log.py        # last 10 questions
 python view_log.py 25     # last 25
 ```
 
+## Feedback buttons
+
+Under every answer are 👍 and 👎 buttons. Clicks are saved to `logs/feedback.jsonl` on this computer. Run `python feedback_to_eval.py` to turn them into draft questions in `evaluation/candidates.csv`, which you can review and add to the evaluation set.
+
+## Evaluation
+
+`evaluation/questions.csv` holds questions with known answers: ones the documents answer, ones that must be refused, and prompt-injection tests. With Ollama running and the test documents indexed:
+
+```powershell
+python evaluate.py                    # run everything
+python evaluate.py --type refuse      # only the must-refuse questions
+python evaluate.py --only A01,A08     # only these ids
+python evaluate.py --file evaluation\\questions_100.csv   # the larger 108-question set
+```
+
+It prints accuracy, the false-refusal rate, the correct-refusal rate, the injection pass rate, how often the right document was retrieved, and the time per question. Every failure is labelled with its cause (`retrieval_miss`, `generation_refusal`, `generation_error`, `unsupported_answer` or `injection_leak`). Each run is saved in `evaluation/results/` and compared with the previous run, so you can see exactly which questions a change fixed or broke.
+
+Upload `evaluation/07_Injection_Test.txt` with the Documents button before running the injection questions. See `evaluation/README.md` for the question file format.
+
 ## Tests
 
 ```powershell
-pip install -r requirements-dev.txt
-pytest
+python -m pip install -r requirements-dev.txt
+python -m pytest
 ```
 
-The tests cover chunking, text extraction (TXT, DOCX, PDF), indexing and deleting, the evidence checks and re-ranking, refusal handling, start-up checks, settings and logging. They use fake embeddings and a temporary database, so they do not need Ollama and do not touch your documents.
+The tests cover chunking, text extraction (TXT, DOCX, PDF), indexing and deleting, the evidence checks and re-ranking, refusal handling, start-up checks, settings, logging, feedback and the evaluation scoring. They use fake embeddings and a temporary database, so they do not need Ollama and do not touch your documents.
 
 ## Privacy
 
 - Documents, vector database and model inference stay on this computer.
 - ChromaDB and Streamlit telemetry are off. Fonts are system fonts, so nothing is downloaded.
-- `data/` (documents and index) and `logs/` are excluded from Git by `.gitignore`.
+- `data/` (documents and index), `logs/` and `evaluation/results/` are excluded from Git by `.gitignore`.
 
 ## Project layout
 
@@ -101,6 +122,10 @@ settings.ini       tunable values
 checks.py          start-up checks
 qlog.py            retrieval log
 view_log.py        prints the log
+evalkit.py         scoring logic for the evaluation (unit-tested)
+evaluate.py        runs the evaluation set and saves the results
+feedback_to_eval.py  turns thumbs up/down clicks into draft questions
+evaluation/        question set, injection test document, results
 start.bat          one-click launcher
 tests/             unit tests
 .streamlit/        Streamlit configuration (localhost, telemetry off)
