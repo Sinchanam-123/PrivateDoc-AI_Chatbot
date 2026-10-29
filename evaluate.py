@@ -21,7 +21,7 @@ from pathlib import Path
 from checks import run_checks
 from evalkit import compare, judge, load_questions, retrieval_ok, summarize
 from ingest import list_sources
-from rag import generate_checked, prepare
+from rag import generate_answer, prepare
 from settings import cfg
 
 ROOT = Path(__file__).parent
@@ -34,14 +34,14 @@ def ask(question):
     started = time.time()
     hits, messages, trace = prepare(question)
     if messages is None:
-        raw, answer, cited, retried = "", "", [], False
+        raw, answer, cited, warned = "", "", [], False
     else:
-        answer, cited, raw, retried = generate_checked(question, hits, messages)
+        answer, cited, raw, warned = generate_answer(question, hits, messages)
     return {
         "answer": answer,
         "raw": raw,
         "refused": not cited,
-        "retried": retried,
+        "warned": warned,
         "retrieved": [h["meta"]["source"] for h in hits],
         "pages": [f'{h["meta"]["source"]} ({h["meta"]["unit"]} {h["meta"]["page"]})' for h in cited],
         "trace": trace,
@@ -152,19 +152,21 @@ def main():
             passed=verdict.passed, category=verdict.category, reason=verdict.reason,
             refused=out["refused"], retrieval_ok=retrieval_ok(q, out["retrieved"]),
             seconds=out["seconds"], answer=out["answer"], sources=out["pages"],
-            raw_answer=out["raw"], trace=out["trace"], sanitized=out["removed"], retried=out["retried"],
+            raw_answer=out["raw"], trace=out["trace"], sanitized=out["removed"], warned=out["warned"],
         )
         results.append(row)
         flag = "PASS" if verdict.passed else "FAIL"
         extra = "" if verdict.passed else f"  <- {verdict.category}: {verdict.reason}"
-        again = "  [re-checked]" if out["retried"] else ""
-        print(f"{flag}  {q.id:<5} {out['seconds']:>5.1f}s  {q.question[:50]}{again}{extra}")
+        note = "  [warned]" if out["warned"] else ""
+        print(f"{flag}  {q.id:<5} {out['seconds']:>5.1f}s  {q.question[:50]}{note}{extra}")
 
     summary = summarize(results)
     print_summary(summary)
-    rechecked = [r["id"] for r in results if r.get("retried")]
-    if rechecked:
-        print(f"Answers re-checked for a flipped meaning: {len(rechecked)} ({', '.join(rechecked)})")
+    warned = [r["id"] for r in results if r.get("warned")]
+    if warned:
+        bad = [r["id"] for r in results if r.get("warned") and not r.get("skipped") and not r["passed"]]
+        print(f"Answers shown with a 'check this answer' warning: {len(warned)} ({', '.join(warned)})")
+        print(f"  of the failures, {summary['failures_warned']} carried the warning ({', '.join(bad) or 'none'})")
 
     failures = [r for r in results if not r.get("skipped") and not r["passed"]]
     if failures:
@@ -198,12 +200,12 @@ def main():
     with open(RESULTS_DIR / f"run-{stamp}.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(["id", "type", "question", "result", "cause", "reason", "refused",
-                    "right_document_retrieved", "seconds", "answer", "model_output", "sources", "sanitized_sentences", "rechecked"])
+                    "right_document_retrieved", "seconds", "answer", "model_output", "sources", "sanitized_sentences", "warned"])
         for r in results:
             result = "SKIP" if r.get("skipped") else ("PASS" if r["passed"] else "FAIL")
             w.writerow([r["id"], r["type"], r["question"], result, r["category"], r["reason"], r["refused"],
                         r["retrieval_ok"], r["seconds"], r["answer"], r.get("raw_answer", ""),
-                        "; ".join(r["sources"]), r.get("sanitized", 0), r.get("retried", False)])
+                        "; ".join(r["sources"]), r.get("sanitized", 0), r.get("warned", False)])
     print(f"\nSaved to evaluation/results/run-{stamp}.json and .csv")
 
 

@@ -363,10 +363,15 @@ def finalize(text: str, hits):
     return clean_preamble(text), hits
 
 
-# ---------- "should" versus "should not": catch answers that flip the meaning ----------
+# ---------- "should" versus "should not": warn when an answer may say the opposite ----------
 _WH = re.compile(r"^\W*(?:what|which|who|whom|where|how)\b", re.IGNORECASE)
-_NEG = re.compile(
-    r"\b(?:not|never|cannot|without|avoid|forbidden|prohibited|instead of|rather than|except)\b|n't\b",
+# In a question, any negative word counts ("which address should the server NOT bind to").
+_Q_NEG = re.compile(r"\b(?:not|never|cannot|without|avoid\w*|forbidden|prohibited)\b|n't\b", re.IGNORECASE)
+# In an answer, only a negation attached to a verb counts. A contrast such as
+# "untrusted content, not as commands" is not a prohibition.
+_A_NEG = re.compile(
+    r"\b(?:should|must|can|could|may|might|will|would|do|does|did|is|are|was|were|be|been)\s+not\b"
+    r"|\bnever\b|\bcannot\b|n't\b|\bavoid\w*\b|\bforbidden\b|\bprohibited\b",
     re.IGNORECASE)
 
 
@@ -376,49 +381,29 @@ def _first_sentence(text):
 
 def polarity_mismatch(question, answer):
     """True when the answer's direction contradicts the question's, for what/which/who
-    questions: asked what SHOULD be done but the answer lists what should NOT be, or the reverse."""
+    questions: asked what SHOULD be done but the answer lists what should NOT be, or the reverse.
+    Yes/no questions are skipped, because 'No' is a perfectly good answer to them."""
     if not _WH.match(question.strip()):
-        return False  # yes/no questions are skipped: 'No' is a perfectly good answer
-    return bool(_NEG.search(question)) != bool(_NEG.search(_first_sentence(answer)))
+        return False
+    return bool(_Q_NEG.search(question)) != bool(_A_NEG.search(_first_sentence(answer)))
 
 
-def retry_messages(messages, previous, question):
-    """The original conversation plus the faulty answer and a short correction."""
-    if _NEG.search(question):
-        fix = ("Your answer describes what should be done, but the question asks about what should NOT "
-               "be done (or what to avoid). Answer the question exactly as asked, using only the passages, "
-               "and say what should not be done or used.")
-    else:
-        fix = ("Your answer describes what should NOT be done, but the question asks what SHOULD be done "
-               "or what is allowed. Answer the question exactly as asked, using only the passages. If the "
-               "passages do not say, reply with the exact sentence from rule 1.")
-    return list(messages) + [{"role": "assistant", "content": previous}, {"role": "user", "content": fix}]
+def generate_answer(question, hits, messages, on_update=None):
+    """Stream an answer and clean it up. Returns (text, cited_hits, raw, warning).
 
+    `warning` is True when the answer may say the opposite of the question. It is only a
+    flag: a small model cannot reliably repair such an answer, and a second try can make it
+    worse (this was measured), so the interface shows a notice instead.
 
-def generate_checked(question, hits, messages, on_update=None):
-    """Stream an answer. If it contradicts the question's polarity, try once more and use
-    the second answer only if it fixes the problem. Returns (text, cited_hits, raw, retried).
-
-    on_update(text, phase) lets the interface show progress; phase is 'answering' or 'checking'."""
+    on_update(text) lets the interface show the answer as it is written."""
     raw = ""
     for piece in stream_answer(messages):
         raw += piece
         if on_update:
-            on_update(raw, "answering")
+            on_update(raw)
     text, cited = finalize(raw, hits)
-    if not (cfg.polarity_check and cited and polarity_mismatch(question, text)):
-        return text, cited, raw, False
-    if on_update:
-        on_update("", "checking")
-    raw2 = ""
-    for piece in stream_answer(retry_messages(messages, raw, question)):
-        raw2 += piece
-        if on_update:
-            on_update(raw2, "answering")
-    text2, cited2 = finalize(raw2, hits)
-    if cited2 and not polarity_mismatch(question, text2):
-        return text2, cited2, raw2, True
-    return text, cited, raw, True  # the retry did not help; keep the first answer
+    warning = bool(cfg.polarity_check and cited and polarity_mismatch(question, text))
+    return text, cited, raw, warning
 
 
 def unload_models():

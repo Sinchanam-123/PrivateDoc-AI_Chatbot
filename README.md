@@ -60,7 +60,7 @@ Common changes:
 | Unrelated questions get answered | lower `strong_distance` (for example 0.35) |
 | Shorter or longer answers | `max_answer_tokens` |
 | A document has the exact words but is not found | keep `hybrid_search = true` (word search runs next to meaning search) |
-| Test the 'should / should not' re-check | set `polarity_check = false`, rerun `python evaluate.py` |
+| Hide the 'Check this answer' notice | set `polarity_check = false` in `settings.ini` |
 | Test whether the injection defences matter | set `sanitize_passages` or `block_override_requests` to `false`, rerun `python evaluate.py` |
 
 ## Start-up checks
@@ -143,6 +143,10 @@ logs/              retrieval log (not committed)
 | Slow or sluggish | Set `llm = llama3.2:1b` in `settings.ini`; use **Unload model** in the Documents popup |
 | Scanned PDF shows "no text found" | Scanned pages need OCR, which is not included yet |
 | Answers wrong after updating | Click **Rebuild index** in the Documents popup |
+
+## Check-this-answer notice
+
+Small models sometimes say the opposite of what was asked (for example listing what should NOT be copied when asked what SHOULD be copied). For what/which/who questions the app compares the direction of the question with the direction of the answer. If they disagree, the answer is shown unchanged with a "Check this answer" notice. The app does not ask the model to retry: that was tested and could make an answer worse.
 
 ## Limitations
 

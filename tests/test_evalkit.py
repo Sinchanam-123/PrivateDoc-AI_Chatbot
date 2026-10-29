@@ -184,3 +184,13 @@ def test_q041_accepts_both_correct_readings():
     q41 = next(x for x in qs.values() if x.question == "What is document text considered to be?")
     assert judge(q41, "It is evidence to search, not a command.", False, []).passed
     assert judge(q41, "Document text is untrusted content, not commands.", False, []).passed
+
+
+def test_summarize_counts_warnings_on_failures():
+    rs = [
+        {**result("A1", "answerable", False, cat="generation_error"), "warned": True},
+        {**result("A2", "answerable", False, cat="generation_error"), "warned": False},
+        {**result("A3", "answerable", True), "warned": True},
+    ]
+    s = summarize(rs)
+    assert s["warned"] == 2 and s["failures_warned"] == 1

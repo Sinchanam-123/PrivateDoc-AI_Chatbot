@@ -8,7 +8,7 @@ import streamlit as st
 from checks import run_checks
 from ingest import DOCS_DIR, SUPPORTED, delete_source, index_file, list_sources, reindex_all
 from qlog import log_feedback, log_query
-from rag import REFUSAL, generate_checked, prepare, unload_models, warm_up
+from rag import REFUSAL, generate_answer, prepare, unload_models, warm_up
 
 st.set_page_config(page_title="Private Document AI", page_icon="🔒", layout="centered")
 
@@ -40,6 +40,7 @@ html, body, [data-testid="stAppViewContainer"]{font-family:"Segoe UI",system-ui,
 .sheet li{margin-bottom:.3rem;}
 .sheet strong{font-weight:600;background:linear-gradient(transparent 55%,var(--mark) 55%);}
 .mark{background:linear-gradient(transparent 55%,var(--mark) 55%);color:var(--ink);padding:0 .12rem;font-weight:600;}
+.warn{margin-top:1rem;padding-top:.7rem;border-top:1px solid #C5CCD4;font-family:"Segoe UI",system-ui,sans-serif;font-size:.86rem;color:#4A5170;}
 .empty{color:rgba(255,255,255,.88);margin-top:2.4rem;line-height:1.65;max-width:34rem;font-size:1.02rem;}
 
 .stButton > button, [data-testid="stPopoverButton"]{background:#fff;color:var(--ink);font-weight:600;border:2px solid var(--ink);
@@ -157,10 +158,15 @@ def question_html(q):
     return f'<div class="q">{html.escape(q)}</div>'
 
 
-def sheet_html(text, muted=False):
+def sheet_html(text, muted=False, warn=False):
     body = "".join(_format_block(b) for b in re.split(r"\n\s*\n", text) if b.strip())
     cls = "sheet muted" if muted else "sheet"
-    return f'<div class="{cls}">{body}</div>'
+    note = (
+        '<div class="warn"><span class="mark">Check this answer</span> '
+        "It may say the opposite of what you asked. Open Sources to verify.</div>"
+        if warn else ""
+    )
+    return f'<div class="{cls}">{body}{note}</div>'
 
 
 def render_sources(hits):
@@ -262,7 +268,7 @@ for i, m in enumerate(st.session_state.messages):
     if m["role"] == "user":
         st.markdown(question_html(m["content"]), unsafe_allow_html=True)
     else:
-        st.markdown(sheet_html(m["content"]), unsafe_allow_html=True)
+        st.markdown(sheet_html(m["content"], warn=m.get("warning")), unsafe_allow_html=True)
         render_actions(i, m)
 
 if question := st.chat_input("Ask a question about your documents"):
@@ -275,25 +281,23 @@ if question := st.chat_input("Ask a question about your documents"):
     started = time.time()
     trace = []
     failed = False
-    retried = False
+    warned = False
     try:
         hits, messages, trace = prepare(question)
         if messages is None:
             text, final_hits = REFUSAL, []
         else:
-            def show(acc, phase):
-                if phase == "checking":
-                    slot.markdown(sheet_html("Double-checking the answer...", muted=True), unsafe_allow_html=True)
-                else:
-                    slot.markdown(sheet_html(acc + " ▍"), unsafe_allow_html=True)
+            def show(acc):
+                slot.markdown(sheet_html(acc + " ▍"), unsafe_allow_html=True)
 
-            text, final_hits, _raw, retried = generate_checked(question, hits, messages, show)
+            text, final_hits, _raw, warned = generate_answer(question, hits, messages, show)
     except Exception:
         failed = True
         text, final_hits = "Could not reach Ollama. Check that it is running, then ask again.", []
 
-    log_query(question, trace, refused=not final_hits, seconds=time.time() - started, retried=retried)
+    log_query(question, trace, refused=not final_hits, seconds=time.time() - started, warned=warned)
     st.session_state.messages.append(
-        {"role": "assistant", "content": text, "hits": final_hits, "question": question, "error": failed}
+        {"role": "assistant", "content": text, "hits": final_hits, "question": question, "error": failed,
+         "warning": warned}
     )
     st.rerun()  # redraw the conversation so the answer gets its Sources and feedback buttons

@@ -401,41 +401,37 @@ def test_unquoted_orders_are_still_removed_even_next_to_examples():
     assert removed == 1 and "reveal the password" not in text
 
 
-# ---------- polarity check: should versus should not ----------
+# ---------- "should" versus "should not": warn, never rewrite ----------
+FLIPPED = [  # real wrong answers from the evaluation runs
+    ("Which files should be copied into the knowledge folder?",
+     "Codes, private keys, session cookies, or API tokens should not be copied into the knowledge folder."),
+    ("What should be stored in the knowledge folder?",
+     "Passwords, recovery codes, private keys, session cookies, or API tokens should not be stored in the knowledge folder."),
+    ("Which address should the server not bind to unless network access is really needed?",
+     "The server should bind to **127.0.0.1** unless network access is intentionally needed and the risks are understood."),
+]
+CORRECT = [  # real correct answers that must NOT be flagged
+    ("What is document text considered to be?",
+     "Document text is considered to be **untrusted content**, not as commands. It must be treated as such and never executed."),
+    ("What should never be placed in the knowledge folder?", "Passwords should never be placed in the knowledge folder."),
+    ("What kinds of items should not be added to a test knowledge base?", "The following items should not be added: Passwords."),
+    ("Which locations should the ingestion script never be pointed at?", "It should never be pointed at the entire C: drive."),
+    ("Which address should the local web interface bind to?", "The local web interface should bind to 127.0.0.1, not 0.0.0.0."),
+    ("What does local-first processing mean here?", "It means no cloud model calls or external search, without sending data elsewhere."),
+    ("What should I not do about antivirus?", "Do not disable antivirus."),
+    ("Is a local model a secure password manager?", "A local model is not a secure password manager."),   # yes/no: skipped
+    ("Should the chatbot scan the entire laptop?", "The chatbot must not scan the entire laptop."),       # yes/no: skipped
+]
+
+
 def test_polarity_mismatch_flags_flipped_answers():
-    flipped = [
-        ("Which files should be copied into the knowledge folder?",
-         "Codes, private keys, session cookies, or API tokens should not be copied into the knowledge folder."),
-        ("What should be stored in the knowledge folder?",
-         "Passwords, recovery codes and private keys should not be stored in the knowledge folder."),
-        ("Which address should the server not bind to unless network access is really needed?",
-         "The server should bind to **127.0.0.1** unless network access is intentionally needed."),
-    ]
-    for q, a in flipped:
+    for q, a in FLIPPED:
         assert rag.polarity_mismatch(q, a), q
 
 
 def test_polarity_mismatch_leaves_correct_answers_alone():
-    fine = [
-        ("What should never be placed in the knowledge folder?", "Passwords should never be placed in the knowledge folder."),
-        ("What kinds of items should not be added to a test knowledge base?", "Passwords and API keys should not be added."),
-        ("Which locations should the ingestion script never be pointed at?", "It should never be pointed at the entire C: drive."),
-        ("Which address should the local web interface bind to?", "The interface should bind to 127.0.0.1."),
-        ("Is a local model a secure password manager?", "A local model is not a secure password manager."),  # yes/no: skipped
-        ("Should the chatbot scan the entire laptop?", "The chatbot must not scan the entire laptop."),
-    ]
-    for q, a in fine:
+    for q, a in CORRECT:
         assert not rag.polarity_mismatch(q, a), q
-
-
-def test_retry_messages_keep_the_conversation_and_explain_the_fix():
-    base = [{"role": "system", "content": "S"}, {"role": "user", "content": "U"}]
-    pos = rag.retry_messages(base, "bad", "Which files should be copied?")
-    assert pos[:2] == base and pos[2] == {"role": "assistant", "content": "bad"}
-    assert "SHOULD" in pos[3]["content"]
-    neg = rag.retry_messages(base, "bad", "Which address should the server not bind to?")
-    assert "NOT" in neg[3]["content"]
-    assert len(base) == 2  # the original list is not modified
 
 
 def _stub_stream(monkeypatch, outputs):
@@ -448,36 +444,28 @@ def _stub_stream(monkeypatch, outputs):
     return calls
 
 
-def test_generate_checked_uses_the_corrected_answer(monkeypatch):
-    calls = _stub_stream(monkeypatch, ["Passwords should not be stored here.",
-                                       "Only deliberately selected files should be stored."])
+def test_generate_answer_warns_but_never_asks_the_model_again(monkeypatch):
+    calls = _stub_stream(monkeypatch, [FLIPPED[0][1], "Only sample files should be copied."])
     seen = []
-    text, cited, raw, retried = rag.generate_checked(
-        "What should be stored in the knowledge folder?", ["h"], [{"role": "user", "content": "x"}],
-        lambda t, phase: seen.append(phase))
-    assert retried and text.startswith("Only deliberately selected") and cited == ["h"]
-    assert len(calls) == 2 and "checking" in seen
+    text, cited, raw, warning = rag.generate_answer(
+        FLIPPED[0][0], ["h"], [{"role": "user", "content": "x"}], lambda t: seen.append(t))
+    assert warning and cited == ["h"]
+    assert text == FLIPPED[0][1]            # the answer is shown exactly as written
+    assert len(calls) == 1                  # no second generation
+    assert seen and seen[-1] == FLIPPED[0][1]
 
 
-def test_generate_checked_keeps_the_first_answer_if_the_retry_does_not_help(monkeypatch):
-    _stub_stream(monkeypatch, ["Passwords should not be stored here.", "Secrets must not be stored either."])
-    text, cited, raw, retried = rag.generate_checked(
-        "What should be stored in the knowledge folder?", ["h"], [{"role": "user", "content": "x"}])
-    assert retried and text == "Passwords should not be stored here."
+def test_generate_answer_has_no_warning_for_a_good_answer(monkeypatch):
+    _stub_stream(monkeypatch, [CORRECT[0][1]])
+    text, cited, raw, warning = rag.generate_answer(CORRECT[0][0], ["h"], [{"role": "user", "content": "x"}])
+    assert not warning and cited == ["h"]
 
 
-def test_generate_checked_does_not_retry_a_good_answer(monkeypatch):
-    calls = _stub_stream(monkeypatch, ["Only deliberately selected files should be stored."])
-    text, cited, raw, retried = rag.generate_checked(
-        "What should be stored in the knowledge folder?", ["h"], [{"role": "user", "content": "x"}])
-    assert not retried and len(calls) == 1
-
-
-def test_generate_checked_never_retries_a_refusal_and_respects_the_switch(monkeypatch):
-    calls = _stub_stream(monkeypatch, [rag.REFUSAL])
-    text, cited, _, retried = rag.generate_checked("What should be stored?", ["h"], [{"role": "user", "content": "x"}])
-    assert text == rag.REFUSAL and cited == [] and not retried and len(calls) == 1
-    calls = _stub_stream(monkeypatch, ["Passwords should not be stored here."])
+def test_generate_answer_never_warns_about_a_refusal_and_respects_the_switch(monkeypatch):
+    _stub_stream(monkeypatch, [rag.REFUSAL])
+    text, cited, _, warning = rag.generate_answer("What should be stored?", ["h"], [{"role": "user", "content": "x"}])
+    assert text == rag.REFUSAL and cited == [] and not warning
+    _stub_stream(monkeypatch, [FLIPPED[0][1]])
     monkeypatch.setattr(rag, "cfg", replace(rag.cfg, polarity_check=False))
-    _, _, _, retried = rag.generate_checked("What should be stored?", ["h"], [{"role": "user", "content": "x"}])
-    assert not retried and len(calls) == 1
+    _, _, _, warning = rag.generate_answer(FLIPPED[0][0], ["h"], [{"role": "user", "content": "x"}])
+    assert not warning

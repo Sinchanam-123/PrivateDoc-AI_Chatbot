@@ -166,6 +166,8 @@ def summarize(results):
             "max": round(max(secs), 2) if secs else None,
         },
         "failures_by_category": cats,
+        "warned": sum(1 for r in ran if r.get("warned")),
+        "failures_warned": sum(1 for r in ran if not r["passed"] and r.get("warned")),
     }
 
 

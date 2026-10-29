@@ -65,3 +65,9 @@ def test_feedback_ignores_bad_verdicts_and_respects_privacy(tmp_path):
     assert "secret" not in text
     qlog.log_feedback("up", "q", "a", [], False, path=tmp_path / "off.jsonl", s=replace(S, logging_enabled=False))
     assert not (tmp_path / "off.jsonl").exists()
+
+
+def test_warning_is_recorded(tmp_path):
+    f = tmp_path / "q.jsonl"
+    qlog.log_query("q", TRACE, False, 1, path=f, s=S, warned=True)
+    assert json.loads(f.read_text())["warned"] is True
