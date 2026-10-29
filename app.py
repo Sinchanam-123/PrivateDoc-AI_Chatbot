@@ -8,7 +8,7 @@ import streamlit as st
 from checks import run_checks
 from ingest import DOCS_DIR, SUPPORTED, delete_source, index_file, list_sources, reindex_all
 from qlog import log_feedback, log_query
-from rag import REFUSAL, finalize, prepare, stream_answer, unload_models, warm_up
+from rag import REFUSAL, generate_checked, prepare, unload_models, warm_up
 
 st.set_page_config(page_title="Private Document AI", page_icon="🔒", layout="centered")
 
@@ -275,21 +275,24 @@ if question := st.chat_input("Ask a question about your documents"):
     started = time.time()
     trace = []
     failed = False
+    retried = False
     try:
         hits, messages, trace = prepare(question)
         if messages is None:
             text, final_hits = REFUSAL, []
         else:
-            acc = ""
-            for piece in stream_answer(messages):
-                acc += piece
-                slot.markdown(sheet_html(acc + " ▍"), unsafe_allow_html=True)
-            text, final_hits = finalize(acc, hits)
+            def show(acc, phase):
+                if phase == "checking":
+                    slot.markdown(sheet_html("Double-checking the answer...", muted=True), unsafe_allow_html=True)
+                else:
+                    slot.markdown(sheet_html(acc + " ▍"), unsafe_allow_html=True)
+
+            text, final_hits, _raw, retried = generate_checked(question, hits, messages, show)
     except Exception:
         failed = True
         text, final_hits = "Could not reach Ollama. Check that it is running, then ask again.", []
 
-    log_query(question, trace, refused=not final_hits, seconds=time.time() - started)
+    log_query(question, trace, refused=not final_hits, seconds=time.time() - started, retried=retried)
     st.session_state.messages.append(
         {"role": "assistant", "content": text, "hits": final_hits, "question": question, "error": failed}
     )

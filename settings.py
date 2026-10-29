@@ -29,6 +29,7 @@ class Settings:
     max_answer_tokens: int = 450
     temperature: float = 0.0
     keep_alive: str = "15m"
+    polarity_check: bool = True
     # logging
     logging_enabled: bool = True
     log_questions: bool = True
@@ -58,6 +59,7 @@ _SECTIONS = {
     "max_answer_tokens": ("generation", "max_answer_tokens"),
     "temperature": ("generation", "temperature"),
     "keep_alive": ("generation", "keep_alive"),
+    "polarity_check": ("generation", "polarity_check"),
     "logging_enabled": ("logging", "enabled"),
     "log_questions": ("logging", "log_questions"),
     "sanitize_passages": ("safety", "sanitize_passages"),

@@ -177,3 +177,10 @@ def test_fixed_questions_in_shipped_set():
     qs = {x.id: x for x in load_questions(SHIPPED)}
     assert qs["A19"].must_include == ["password*"]
     assert "02_Safe_Document_Handling.docx" in qs["A11"].expected_source
+
+
+def test_q041_accepts_both_correct_readings():
+    qs = {x.id: x for x in load_questions(SHIPPED.parent / "questions_100.csv")}
+    q41 = next(x for x in qs.values() if x.question == "What is document text considered to be?")
+    assert judge(q41, "It is evidence to search, not a command.", False, []).passed
+    assert judge(q41, "Document text is untrusted content, not commands.", False, []).passed

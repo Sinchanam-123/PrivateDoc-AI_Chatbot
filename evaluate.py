@@ -21,7 +21,7 @@ from pathlib import Path
 from checks import run_checks
 from evalkit import compare, judge, load_questions, retrieval_ok, summarize
 from ingest import list_sources
-from rag import finalize, prepare, stream_answer
+from rag import generate_checked, prepare
 from settings import cfg
 
 ROOT = Path(__file__).parent
@@ -34,14 +34,14 @@ def ask(question):
     started = time.time()
     hits, messages, trace = prepare(question)
     if messages is None:
-        raw, answer, cited = "", "", []
+        raw, answer, cited, retried = "", "", [], False
     else:
-        raw = "".join(stream_answer(messages))
-        answer, cited = finalize(raw, hits)
+        answer, cited, raw, retried = generate_checked(question, hits, messages)
     return {
         "answer": answer,
         "raw": raw,
         "refused": not cited,
+        "retried": retried,
         "retrieved": [h["meta"]["source"] for h in hits],
         "pages": [f'{h["meta"]["source"]} ({h["meta"]["unit"]} {h["meta"]["page"]})' for h in cited],
         "trace": trace,
@@ -82,14 +82,16 @@ def print_summary(s):
     print("=" * 62)
 
 
-def load_previous():
-    files = sorted(RESULTS_DIR.glob("run-*.json"))
-    if not files:
-        return None
-    try:
-        return json.loads(files[-1].read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+def load_previous(questions_file):
+    """Latest earlier run of the SAME question file (so the comparison is meaningful)."""
+    for f in sorted(RESULTS_DIR.glob("run-*.json"), reverse=True):
+        try:
+            record = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if Path(record.get("questions_file", "")).name == Path(questions_file).name:
+            return record
+    return None
 
 
 def main():
@@ -132,7 +134,7 @@ def main():
         for m in missing:
             print(f"  - {m}")
 
-    previous = None if args.no_compare else load_previous()
+    previous = None if args.no_compare else load_previous(args.file)
     print(f"\nRunning {len(questions)} questions with {cfg.llm_model} ...\n")
     results = []
     for q in questions:
@@ -150,15 +152,19 @@ def main():
             passed=verdict.passed, category=verdict.category, reason=verdict.reason,
             refused=out["refused"], retrieval_ok=retrieval_ok(q, out["retrieved"]),
             seconds=out["seconds"], answer=out["answer"], sources=out["pages"],
-            raw_answer=out["raw"], trace=out["trace"], sanitized=out["removed"],
+            raw_answer=out["raw"], trace=out["trace"], sanitized=out["removed"], retried=out["retried"],
         )
         results.append(row)
         flag = "PASS" if verdict.passed else "FAIL"
         extra = "" if verdict.passed else f"  <- {verdict.category}: {verdict.reason}"
-        print(f"{flag}  {q.id:<5} {out['seconds']:>5.1f}s  {q.question[:50]}{extra}")
+        again = "  [re-checked]" if out["retried"] else ""
+        print(f"{flag}  {q.id:<5} {out['seconds']:>5.1f}s  {q.question[:50]}{again}{extra}")
 
     summary = summarize(results)
     print_summary(summary)
+    rechecked = [r["id"] for r in results if r.get("retried")]
+    if rechecked:
+        print(f"Answers re-checked for a flipped meaning: {len(rechecked)} ({', '.join(rechecked)})")
 
     failures = [r for r in results if not r.get("skipped") and not r["passed"]]
     if failures:
@@ -183,7 +189,7 @@ def main():
             print(f"  accuracy: {pct(old)} -> {pct(summary['accuracy'])} ({delta:+.0f} points)")
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     settings_snapshot = {k: v for k, v in asdict(cfg).items() if k != "warnings"}
     record = {"time": datetime.now().isoformat(timespec="seconds"), "model": cfg.llm_model,
               "settings": settings_snapshot, "questions_file": str(args.file),
@@ -192,12 +198,12 @@ def main():
     with open(RESULTS_DIR / f"run-{stamp}.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(["id", "type", "question", "result", "cause", "reason", "refused",
-                    "right_document_retrieved", "seconds", "answer", "model_output", "sources", "sanitized_sentences"])
+                    "right_document_retrieved", "seconds", "answer", "model_output", "sources", "sanitized_sentences", "rechecked"])
         for r in results:
             result = "SKIP" if r.get("skipped") else ("PASS" if r["passed"] else "FAIL")
             w.writerow([r["id"], r["type"], r["question"], result, r["category"], r["reason"], r["refused"],
                         r["retrieval_ok"], r["seconds"], r["answer"], r.get("raw_answer", ""),
-                        "; ".join(r["sources"]), r.get("sanitized", 0)])
+                        "; ".join(r["sources"]), r.get("sanitized", 0), r.get("retried", False)])
     print(f"\nSaved to evaluation/results/run-{stamp}.json and .csv")
 
 

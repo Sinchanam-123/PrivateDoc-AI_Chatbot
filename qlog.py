@@ -13,13 +13,14 @@ LOG_FILE = Path(__file__).parent / "logs" / "queries.jsonl"
 FEEDBACK_FILE = Path(__file__).parent / "logs" / "feedback.jsonl"
 
 
-def log_query(question, trace, refused, seconds, path=LOG_FILE, s=cfg):
+def log_query(question, trace, refused, seconds, path=LOG_FILE, s=cfg, retried=False):
     if not s.logging_enabled:
         return
     record = {
         "time": datetime.now().isoformat(timespec="seconds"),
         "question": question if s.log_questions else None,
         "refused": bool(refused),
+        "retried": bool(retried),
         "seconds": round(seconds, 2),
         "model": s.llm_model,
         "candidates": trace,

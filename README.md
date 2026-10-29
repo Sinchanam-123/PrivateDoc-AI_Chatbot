@@ -60,6 +60,7 @@ Common changes:
 | Unrelated questions get answered | lower `strong_distance` (for example 0.35) |
 | Shorter or longer answers | `max_answer_tokens` |
 | A document has the exact words but is not found | keep `hybrid_search = true` (word search runs next to meaning search) |
+| Test the 'should / should not' re-check | set `polarity_check = false`, rerun `python evaluate.py` |
 | Test whether the injection defences matter | set `sanitize_passages` or `block_override_requests` to `false`, rerun `python evaluate.py` |
 
 ## Start-up checks

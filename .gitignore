@@ -7,4 +7,3 @@ logs/
 .env
 evaluation/results/
 evaluation/candidates.csv
-*.zip

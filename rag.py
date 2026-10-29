@@ -130,13 +130,36 @@ _INJECTION = [re.compile(p, re.IGNORECASE) for p in [
     r"\byou\s+are\s+now\b",
 ]]
 _OVERRIDE_REQUEST = [re.compile(p, re.IGNORECASE) for p in [
-    r"\bignore\b.{0,40}\b(rules?|instructions?|prompts?|guidelines)\b",
-    r"\bdisregard\b.{0,40}\b(rules?|instructions?|prompts?|guidelines)\b",
-    r"\bsystem\s+prompt\b",
-    r"\b(reveal|show|print|repeat|leak)\b.{0,30}\b(your (rules|instructions|prompt))\b",
-    r"\bjailbreak\b|\bdeveloper mode\b|\byou\s+are\s+now\b",
+    # an order at the start of a sentence: "Ignore your rules...", "Forget everything...", "Disregard the documents..."
+    r"(?:^|[.!?]\s+)(?:(?:please|now|just|then|and|okay|ok)[\s,]+)*(?:ignore|disregard|forget)\b.{0,40}"
+    r"\b(?:rules?|instructions?|prompts?|guidelines|previous|prior|above|earlier|everything|all|your|documents?|context|passages?)\b",
+    # asking for the hidden prompt
+    r"\b(?:reveal|show|print|repeat|leak|display|output|tell\s+me|what\s+is|what's)\b.{0,25}\byour\s+(?:system\s+)?(?:prompt|instructions|rules)\b",
+    r"\b(?:reveal|show|print|repeat|leak|display|output)\b.{0,25}\bsystem\s+prompt\b",
+    r"\bjailbreak\b|\bdeveloper\s+mode\b|\byou\s+are\s+now\b",
 ]]
 REMOVED_MARK = "[instruction-like text removed]"
+
+
+_DESCRIBES = re.compile(
+    r"\b(?:such as|for example|e\.g\.|may contain|might contain|can contain|called|phrases? like|"
+    r"text (?:that )?says|instructions? like)\b", re.IGNORECASE)
+
+
+def _inside_quotes(text, pos):
+    before = text[:pos]
+    return before.count("\u201c") > before.count("\u201d") or before.count('"') % 2 == 1
+
+
+def _is_command_sentence(sentence):
+    """True if the sentence gives the AI an order. A quoted example that is introduced as
+    an example ('... instructions such as "ignore previous rules"') is only a mention."""
+    for rx in _INJECTION:
+        for m in rx.finditer(sentence):
+            if _DESCRIBES.search(sentence) and _inside_quotes(sentence, m.start()):
+                continue
+            return True
+    return False
 
 
 def sanitize_passage(text, enabled=None):
@@ -147,7 +170,7 @@ def sanitize_passage(text, enabled=None):
         return text, 0
     out, removed = [], 0
     for sentence in re.split(r"(?<=[.!?])\s+", text):
-        if any(rx.search(sentence) for rx in _INJECTION):
+        if _is_command_sentence(sentence):
             removed += 1
             if not out or out[-1] != REMOVED_MARK:
                 out.append(REMOVED_MARK)
@@ -288,15 +311,7 @@ def _is_refusal(text: str) -> bool:
     return False
 
 
-_META_START = re.compile(
-    r"^(?:(?:yes|no)\b[\s.,:;!\-]*)?(?:the\s+)?(?:provided\s+)?(?:passages?|context)\b"
-    r"|^(?:yes|no)?[\s.,:;!\-]*there\s+is\s+no\s+(?:information|mention)\b",
-    re.IGNORECASE,
-)
-_NEGATION = re.compile(r"\b(?:not|no|never|cannot|neither|nor)\b|n't", re.IGNORECASE)
-
-
-# "... is not specified in the passages provided" / "The passages do not mention ..."
+# An answer that says the information is missing, in the model's own words, is a refusal.
 _NOT_COVERED = re.compile(
     r"\b(?:not|never)\s+(?:been\s+)?(?:specified|mentioned|stated|provided|found|covered|available|given)"
     r"\s+in\s+(?:the\s+)?(?:provided\s+)?(?:passages?|context)\b"
@@ -305,17 +320,39 @@ _NOT_COVERED = re.compile(
     r"|\bno\s+(?:information|mention|details?)\b[^.]{0,60}\b(?:in|within)\s+the\s+(?:provided\s+)?(?:passages?|context)\b",
     re.IGNORECASE,
 )
+_THERE_IS_NO = re.compile(r"^there\s+is\s+no\s+(?:information|mention)\b", re.IGNORECASE)
+_PASSAGES_SUBJECT = re.compile(r"^(?:the\s+)?(?:provided\s+)?(?:passages?|context)\b", re.IGNORECASE)
+_MISSING_FACT = re.compile(
+    r"\bnot\s+(?:been\s+)?(?:specified|mentioned|stated|provided|found|covered|available|given)\b"
+    r"|\bno\s+(?:information|mention|details?)\b", re.IGNORECASE)
 
 
 def _is_meta_refusal(text: str) -> bool:
-    """Answers that say the information is missing, in the model's own words, are refusals.
-    Only the FIRST sentence is checked, so a real answer that ends with a note such as
-    'The font is not specified in the passages.' is kept."""
-    t = text.strip()
-    if _META_START.match(t) and _NEGATION.search(t):
-        return True
+    """True for refusals in other words, such as 'The passages do not mention your name.'
+    Only the first sentence is looked at, and plain words like 'not' or 'never' are not
+    enough: 'The passages state that passwords should never be stored' is a real answer."""
+    t = re.sub(r"^(?:yes|no)\b[\s.,:;!\-]*", "", text.strip(), flags=re.IGNORECASE)
     first = re.split(r"(?<=[.!?])\s+", t, maxsplit=1)[0]
-    return bool(_NOT_COVERED.search(first))
+    if _THERE_IS_NO.match(t) or _NOT_COVERED.search(first):
+        return True
+    return bool(_PASSAGES_SUBJECT.match(t) and _MISSING_FACT.search(first))
+
+
+# "The passages state that ..." is filler; show just the answer.
+_PREAMBLE = re.compile(
+    r"^(?:according\s+to\s+the\s+(?:provided\s+)?(?:passages?|context),?\s+"
+    r"|the\s+(?:provided\s+)?(?:passages?|context)\s+(?:state|states|suggest|suggests|say|says|mention|mentions|"
+    r"indicate|indicates|show|shows|describe|describes|explain|explains)\s+that\s+)",
+    re.IGNORECASE,
+)
+
+
+def clean_preamble(text: str) -> str:
+    m = _PREAMBLE.match(text)
+    if not m or not text[m.end():].strip():
+        return text
+    rest = text[m.end():]
+    return rest[:1].upper() + rest[1:]
 
 
 def finalize(text: str, hits):
@@ -323,7 +360,65 @@ def finalize(text: str, hits):
     text = text.strip()
     if not re.search(r"[A-Za-z]{3,}", text) or _is_refusal(text) or _is_meta_refusal(text):
         return REFUSAL, []
-    return text, hits
+    return clean_preamble(text), hits
+
+
+# ---------- "should" versus "should not": catch answers that flip the meaning ----------
+_WH = re.compile(r"^\W*(?:what|which|who|whom|where|how)\b", re.IGNORECASE)
+_NEG = re.compile(
+    r"\b(?:not|never|cannot|without|avoid|forbidden|prohibited|instead of|rather than|except)\b|n't\b",
+    re.IGNORECASE)
+
+
+def _first_sentence(text):
+    return re.split(r"(?<=[.!?])\s+", text.strip(), maxsplit=1)[0]
+
+
+def polarity_mismatch(question, answer):
+    """True when the answer's direction contradicts the question's, for what/which/who
+    questions: asked what SHOULD be done but the answer lists what should NOT be, or the reverse."""
+    if not _WH.match(question.strip()):
+        return False  # yes/no questions are skipped: 'No' is a perfectly good answer
+    return bool(_NEG.search(question)) != bool(_NEG.search(_first_sentence(answer)))
+
+
+def retry_messages(messages, previous, question):
+    """The original conversation plus the faulty answer and a short correction."""
+    if _NEG.search(question):
+        fix = ("Your answer describes what should be done, but the question asks about what should NOT "
+               "be done (or what to avoid). Answer the question exactly as asked, using only the passages, "
+               "and say what should not be done or used.")
+    else:
+        fix = ("Your answer describes what should NOT be done, but the question asks what SHOULD be done "
+               "or what is allowed. Answer the question exactly as asked, using only the passages. If the "
+               "passages do not say, reply with the exact sentence from rule 1.")
+    return list(messages) + [{"role": "assistant", "content": previous}, {"role": "user", "content": fix}]
+
+
+def generate_checked(question, hits, messages, on_update=None):
+    """Stream an answer. If it contradicts the question's polarity, try once more and use
+    the second answer only if it fixes the problem. Returns (text, cited_hits, raw, retried).
+
+    on_update(text, phase) lets the interface show progress; phase is 'answering' or 'checking'."""
+    raw = ""
+    for piece in stream_answer(messages):
+        raw += piece
+        if on_update:
+            on_update(raw, "answering")
+    text, cited = finalize(raw, hits)
+    if not (cfg.polarity_check and cited and polarity_mismatch(question, text)):
+        return text, cited, raw, False
+    if on_update:
+        on_update("", "checking")
+    raw2 = ""
+    for piece in stream_answer(retry_messages(messages, raw, question)):
+        raw2 += piece
+        if on_update:
+            on_update(raw2, "answering")
+    text2, cited2 = finalize(raw2, hits)
+    if cited2 and not polarity_mismatch(question, text2):
+        return text2, cited2, raw2, True
+    return text, cited, raw, True  # the retry did not help; keep the first answer
 
 
 def unload_models():
