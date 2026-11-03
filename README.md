@@ -97,6 +97,19 @@ It prints accuracy, the false-refusal rate, the correct-refusal rate, the inject
 
 Upload `evaluation/07_Injection_Test.txt` with the Documents button before running the injection questions. See `evaluation/README.md` for the question file format.
 
+## Ablation: what does each feature contribute?
+
+`ablate.py` switches features off one at a time, reruns the questions, and prints a table showing which questions got worse or better. Run it with Ollama running and your documents indexed:
+
+```powershell
+python ablate.py --list                                        # see the variants
+python ablate.py --file evaluation\questions_100.csv           # every variant (takes a while)
+python ablate.py --names no_hybrid,top_k_3                     # only some (the baseline always runs)
+python ablate.py --type answerable                             # only one question type (faster)
+```
+
+Results are saved after every variant in `evaluation/results/ablation-*.md` (a table you can paste into a report) and `.json`. Any single setting can also be changed for one normal run: `python evaluate.py --set top_k=3 --set hybrid_search=false`.
+
 ## Tests
 
 ```powershell

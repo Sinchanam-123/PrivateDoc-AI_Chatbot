@@ -1,6 +1,6 @@
 """settings.py - read tunable values from settings.ini (with safe defaults)."""
 import configparser
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 
 SETTINGS_FILE = Path(__file__).parent / "settings.ini"
@@ -111,6 +111,45 @@ def load_settings(path=SETTINGS_FILE) -> Settings:
     s = Settings(**values)
     notes.extend(validate(s))
     return Settings(**{**values, "warnings": tuple(notes)})
+
+
+def parse_overrides(pairs):
+    """['top_k=3', 'hybrid_search=false'] -> {'top_k': 3, 'hybrid_search': False}.
+    Raises ValueError with a readable message for unknown names or bad values."""
+    known = {f.name for f in fields(Settings) if f.name != "warnings"}
+    defaults = Settings()
+    out = {}
+    for pair in pairs or []:
+        if "=" not in pair:
+            raise ValueError(f"'{pair}' should look like name=value")
+        key, value = (x.strip() for x in pair.split("=", 1))
+        if key not in known:
+            raise ValueError(f"unknown setting '{key}'. Known settings: {', '.join(sorted(known))}")
+        default = getattr(defaults, key)
+        try:
+            if isinstance(default, bool):
+                lowered = value.lower()
+                if lowered in ("true", "1", "yes", "on"):
+                    out[key] = True
+                elif lowered in ("false", "0", "no", "off"):
+                    out[key] = False
+                else:
+                    raise ValueError
+            elif isinstance(default, int):
+                out[key] = int(value)
+            elif isinstance(default, float):
+                out[key] = float(value)
+            else:
+                out[key] = value
+        except ValueError:
+            raise ValueError(f"'{value}' is not a valid value for {key}") from None
+    return out
+
+
+def apply_overrides(base, overrides):
+    """Return (new_settings, problems). `problems` lists invalid combinations."""
+    new = replace(base, **overrides)
+    return new, validate(new)
 
 
 cfg = load_settings()

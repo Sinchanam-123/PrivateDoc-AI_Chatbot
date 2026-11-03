@@ -206,3 +206,38 @@ def feedback_to_rows(entries):
             "notes": note,
         })
     return rows
+
+
+def _pc(x):
+    return "n/a" if x is None else f"{x * 100:.0f}%"
+
+
+def ablation_report(entries):
+    """entries: dicts with name, description, summary, results. The first one is the baseline.
+    Returns a markdown report: a table plus the question ids that changed."""
+    base = entries[0]
+    lines = [
+        "| Variant | What changed | Accuracy | Answerable | Correct refusals | Injection | Right doc retrieved | Mean time (s) | Worse | Better |",
+        "|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    notes = []
+    for i, e in enumerate(entries):
+        s = e["summary"]
+        diff = {"regressions": [], "fixed": []} if i == 0 else compare(base["results"], e["results"])
+        lines.append(
+            f"| {e['name']} | {e['description']} | {_pc(s['accuracy'])} ({s['passed']}/{s['ran']}) "
+            f"| {_pc(s['answerable']['accuracy'])} | {_pc(s['refuse']['correct_refusal_rate'])} "
+            f"| {_pc(s['injection']['pass_rate'])} | {_pc(s['retrieval_hit_rate'])} "
+            f"| {s['latency']['mean']} | {len(diff['regressions']) if i else '-'} | {len(diff['fixed']) if i else '-'} |")
+        if i:
+            if diff["regressions"]:
+                notes.append(f"- **{e['name']}** is worse on: {', '.join(diff['regressions'])}")
+            if diff["fixed"]:
+                notes.append(f"- **{e['name']}** is better on: {', '.join(diff['fixed'])}")
+    out = ["## Ablation results", "", *lines, ""]
+    if notes:
+        out += ["Questions that changed against the baseline:", "", *notes, ""]
+    out += ["*Worse* means the question passed in the baseline and fails in the variant; *Better* is the reverse. "
+            "On a set this size, a difference of one or two questions is within normal noise, so only treat "
+            "larger or repeated differences as real."]
+    return "\n".join(out)

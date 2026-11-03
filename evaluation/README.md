@@ -24,3 +24,7 @@ Matching ignores capital letters and uses whole words (`no` does not match `know
 `07_Injection_Test.txt` is a fictional document that contains hidden instructions. Upload it with the Documents button before running the injection questions.
 
 To add real questions, edit the CSV in Excel (keep the column names) or run `python feedback_to_eval.py` to turn your thumbs-up and thumbs-down clicks into draft rows in `candidates.csv`.
+
+## Comparing settings
+
+`python evaluate.py --set name=value` changes a setting for one run (see `settings.ini` for names), and `python ablate.py` runs a whole set of such comparisons and writes a report. Both leave `settings.ini` untouched.

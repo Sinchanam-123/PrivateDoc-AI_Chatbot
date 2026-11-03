@@ -6,6 +6,8 @@ Usage (inside the venv, with Ollama running):
     python evaluate.py --only A01,A08      only these ids
     python evaluate.py --file my_set.csv   use another question file
     python evaluate.py --no-compare        do not compare with the previous run
+    python evaluate.py --set top_k=3 --set hybrid_search=false
+                                           change settings for this run only (not saved)
 
 Each run is saved in evaluation/results/ (JSON for compare, CSV for Excel).
 """
@@ -21,8 +23,9 @@ from pathlib import Path
 from checks import run_checks
 from evalkit import compare, judge, load_questions, retrieval_ok, summarize
 from ingest import list_sources
+import rag
 from rag import generate_answer, prepare
-from settings import cfg
+from settings import apply_overrides, parse_overrides
 
 ROOT = Path(__file__).parent
 DEFAULT_QUESTIONS = ROOT / "evaluation" / "questions.csv"
@@ -94,57 +97,37 @@ def load_previous(questions_file):
     return None
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--file", default=str(DEFAULT_QUESTIONS))
-    ap.add_argument("--type", choices=["answerable", "refuse", "injection"])
-    ap.add_argument("--only", help="comma-separated question ids")
-    ap.add_argument("--no-compare", action="store_true")
-    args = ap.parse_args()
+def settings_diff(old, new):
+    """Readable list of settings that differ between two runs."""
+    return [f"{k}: {old.get(k)} -> {new.get(k)}" for k in sorted(new) if k in old and old[k] != new[k]]
 
-    problems = run_checks()
-    if problems:
-        print("Cannot run the evaluation yet:")
-        for p in problems:
-            print(f"  - {p['title']}\n    {p['fix']}")
-        sys.exit(1)
 
-    try:
-        questions = load_questions(args.file)
-    except (OSError, ValueError) as e:
-        print(f"Problem with the question file: {e}")
-        sys.exit(1)
-    if args.type:
-        questions = [q for q in questions if q.type == args.type]
-    if args.only:
-        wanted = {i.strip() for i in args.only.split(",")}
+def select_questions(path, qtype=None, only=None):
+    questions = load_questions(path)
+    if qtype:
+        questions = [q for q in questions if q.type == qtype]
+    if only:
+        wanted = {i.strip() for i in only.split(",")}
         questions = [q for q in questions if q.id in wanted]
-    if not questions:
-        print("No questions to run.")
-        sys.exit(1)
+    return questions
 
-    indexed = set(list_sources())
-    if not indexed:
-        print("No documents are indexed. Add them in the app first (Documents button).")
-        sys.exit(1)
-    needed = {s for q in questions if q.type != "refuse" for s in q.expected_source}
-    missing = sorted(s for s in needed if s not in indexed)
-    if missing:
-        print("These documents are not indexed, so questions that need only them will be skipped:")
-        for m in missing:
-            print(f"  - {m}")
 
-    previous = None if args.no_compare else load_previous(args.file)
-    print(f"\nRunning {len(questions)} questions with {cfg.llm_model} ...\n")
+def run_questions(questions, indexed, verbose=True, progress=None):
+    """Ask every question and judge the answer. Returns the list of result rows.
+
+    progress(done, total, row) is called after each question (used for a live counter)."""
     results = []
-    for q in questions:
+    for n, q in enumerate(questions, 1):
         row = {"id": q.id, "type": q.type, "question": q.question, "skipped": False}
         if q.type != "refuse" and q.expected_source and not (set(q.expected_source) & indexed):
             row.update(skipped=True, passed=None, category="", reason="document not indexed",
                        refused=None, retrieval_ok=None, seconds=None, answer="", sources=[],
-                       raw_answer="", trace=[], sanitized=0)
-            print(f"SKIP  {q.id:<5} {q.question[:55]}")
+                       raw_answer="", trace=[], sanitized=0, warned=False)
+            if verbose:
+                print(f"SKIP  {q.id:<5} {q.question[:55]}")
             results.append(row)
+            if progress:
+                progress(n, len(questions), row)
             continue
         out = ask(q.question)
         verdict = judge(q, out["answer"], out["refused"], out["retrieved"])
@@ -155,10 +138,76 @@ def main():
             raw_answer=out["raw"], trace=out["trace"], sanitized=out["removed"], warned=out["warned"],
         )
         results.append(row)
-        flag = "PASS" if verdict.passed else "FAIL"
-        extra = "" if verdict.passed else f"  <- {verdict.category}: {verdict.reason}"
-        note = "  [warned]" if out["warned"] else ""
-        print(f"{flag}  {q.id:<5} {out['seconds']:>5.1f}s  {q.question[:50]}{note}{extra}")
+        if verbose:
+            flag = "PASS" if verdict.passed else "FAIL"
+            extra = "" if verdict.passed else f"  <- {verdict.category}: {verdict.reason}"
+            note = "  [warned]" if out["warned"] else ""
+            print(f"{flag}  {q.id:<5} {out['seconds']:>5.1f}s  {q.question[:50]}{note}{extra}")
+        if progress:
+            progress(n, len(questions), row)
+    return results
+
+
+def ready_or_exit(questions):
+    """Check Ollama and the index. Returns the set of indexed documents, or exits with a message."""
+    problems = run_checks()
+    if problems:
+        print("Cannot run the evaluation yet:")
+        for p in problems:
+            print(f"  - {p['title']}\n    {p['fix']}")
+        sys.exit(1)
+    indexed = set(list_sources())
+    if not indexed:
+        print("No documents are indexed. Add them in the app first (Documents button).")
+        sys.exit(1)
+    needed = {s for q in questions if q.type != "refuse" for s in q.expected_source}
+    missing = sorted(s for s in needed if s not in indexed)
+    if missing:
+        print("These documents are not indexed, so questions that need only them will be skipped:")
+        for m in missing:
+            print(f"  - {m}")
+    return indexed
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--file", default=str(DEFAULT_QUESTIONS))
+    ap.add_argument("--type", choices=["answerable", "refuse", "injection"])
+    ap.add_argument("--only", help="comma-separated question ids")
+    ap.add_argument("--no-compare", action="store_true")
+    ap.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
+                    help="change a setting for this run only, for example --set top_k=3")
+    args = ap.parse_args()
+
+    base_cfg = rag.cfg
+    try:
+        overrides = parse_overrides(args.set)
+        if overrides:
+            new_cfg, problems = apply_overrides(base_cfg, overrides)
+            if problems:
+                print("Those settings do not work together:")
+                for p in problems:
+                    print(f"  - {p}")
+                sys.exit(1)
+            rag.cfg = new_cfg
+            print("Settings changed for this run only: " + ", ".join(f"{k}={v}" for k, v in overrides.items()))
+    except ValueError as e:
+        print(f"Problem with --set: {e}")
+        sys.exit(1)
+
+    try:
+        questions = select_questions(args.file, args.type, args.only)
+    except (OSError, ValueError) as e:
+        print(f"Problem with the question file: {e}")
+        sys.exit(1)
+    if not questions:
+        print("No questions to run.")
+        sys.exit(1)
+    indexed = ready_or_exit(questions)
+
+    previous = None if args.no_compare else load_previous(args.file)
+    print(f"\nRunning {len(questions)} questions with {rag.cfg.llm_model} ...\n")
+    results = run_questions(questions, indexed)
 
     summary = summarize(results)
     print_summary(summary)
@@ -180,9 +229,13 @@ def main():
             if r["category"] in ("retrieval_miss", "generation_refusal", "unsupported_answer"):
                 print_trace(r.get("trace"))
 
+    settings_snapshot = {k: v for k, v in asdict(rag.cfg).items() if k != "warnings"}
     if previous:
         diff = compare(previous["results"], results)
         print(f"\nCompared with the previous run ({previous['time']}), {diff['compared']} questions in common:")
+        changed = settings_diff(previous.get("settings", {}), settings_snapshot)
+        if changed:
+            print("  settings differ: " + "; ".join(changed))
         print(f"  newly failing: {', '.join(diff['regressions']) or 'none'}")
         print(f"  newly fixed:   {', '.join(diff['fixed']) or 'none'}")
         old = previous["summary"].get("accuracy")
@@ -192,8 +245,7 @@ def main():
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    settings_snapshot = {k: v for k, v in asdict(cfg).items() if k != "warnings"}
-    record = {"time": datetime.now().isoformat(timespec="seconds"), "model": cfg.llm_model,
+    record = {"time": datetime.now().isoformat(timespec="seconds"), "model": rag.cfg.llm_model,
               "settings": settings_snapshot, "questions_file": str(args.file),
               "summary": summary, "results": results}
     (RESULTS_DIR / f"run-{stamp}.json").write_text(json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8")
