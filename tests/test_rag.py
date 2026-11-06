@@ -434,6 +434,31 @@ def test_polarity_mismatch_leaves_correct_answers_alone():
         assert not rag.polarity_mismatch(q, a), q
 
 
+FALSE_ALARMS = [  # questions that got a needless warning in the 108-question run, with typical correct answers
+    ("What is the privacy goal for this test project?", "The privacy goal is that documents and questions should not leave the laptop."),
+    ("What should not be configured unless the owner explicitly decides to?", "Cloud APIs, online search, telemetry uploads, or external document sharing."),
+    ("Which types of records should I not start with?", "Tax records, medical records, identity documents, passwords, or confidential work files."),
+    ("What is the Safe Local Chatbot Test Pack?", "A pack of fictional test data that does not install anything."),
+    ("What should I not do about antivirus?", "Disabling antivirus software."),
+    ("What do the README test documents contain?", "Fictional, low-risk sample content that should not include real personal data."),
+    ("What are the test documents designed to test?", "Document ingestion, retrieval and what the chatbot does when it cannot find an answer; it should not guess."),
+    ("What are the main safety rules when testing this chatbot?", "Do not add passwords, do not disable Windows Defender, and keep the service on 127.0.0.1."),
+    ("What misleading instructions does the safe handling checklist say a document may contain?", "Instructions such as ignore previous rules; the chatbot must not obey them."),
+]
+
+
+def test_correct_answers_that_merely_contain_a_negation_are_not_flagged():
+    for q, a in FALSE_ALARMS:
+        assert not rag.polarity_mismatch(q, a), q
+
+
+def test_only_a_flip_of_the_same_action_is_flagged():
+    assert rag.polarity_mismatch("Which files should be copied into the folder?", "Secrets should not be copied into the folder.")
+    assert not rag.polarity_mismatch("Which files should be copied into the folder?", "Only sample files should be copied, and secrets should not be uploaded.")
+    assert rag.polarity_mismatch("Which port should the server not use?", "The server should use port 8501.")
+    assert not rag.polarity_mismatch("Which port should the server not use?", "It should not use port 80.")
+
+
 def _stub_stream(monkeypatch, outputs):
     calls = []
 

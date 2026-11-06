@@ -159,7 +159,7 @@ logs/              retrieval log (not committed)
 
 ## Check-this-answer notice
 
-Small models sometimes say the opposite of what was asked (for example listing what should NOT be copied when asked what SHOULD be copied). For what/which/who questions the app compares the direction of the question with the direction of the answer. If they disagree, the answer is shown unchanged with a "Check this answer" notice. The app does not ask the model to retry: that was tested and could make an answer worse.
+Small models sometimes say the opposite of what was asked, for example answering "which files should be copied?" with "secrets should not be copied". For what/which/who questions the app looks for exactly that: the answer flipping the *same action* the question asked about. If it finds one, the answer is shown unchanged with a "Check this answer" notice. A "not" elsewhere in an answer does not trigger it, and the app never asks the model to retry (that was tested and could make an answer worse). The notice can be turned off with `polarity_check = false`.
 
 ## Limitations
 

@@ -363,29 +363,44 @@ def finalize(text: str, hits):
     return clean_preamble(text), hits
 
 
-# ---------- "should" versus "should not": warn when an answer may say the opposite ----------
+# ---------- "should" versus "should not": warn when an answer flips the SAME action ----------
 _WH = re.compile(r"^\W*(?:what|which|who|whom|where|how)\b", re.IGNORECASE)
-# In a question, any negative word counts ("which address should the server NOT bind to").
-_Q_NEG = re.compile(r"\b(?:not|never|cannot|without|avoid\w*|forbidden|prohibited)\b|n't\b", re.IGNORECASE)
-# In an answer, only a negation attached to a verb counts. A contrast such as
-# "untrusted content, not as commands" is not a prohibition.
-_A_NEG = re.compile(
-    r"\b(?:should|must|can|could|may|might|will|would|do|does|did|is|are|was|were|be|been)\s+not\b"
-    r"|\bnever\b|\bcannot\b|n't\b|\bavoid\w*\b|\bforbidden\b|\bprohibited\b",
-    re.IGNORECASE)
+_MODAL = r"(?:should|must|can|could|may|might|will|would)"
+# "should not be copied", "should never be placed", "should the server not bind" -> the action word
+_NEGATED_ACTION = re.compile(_MODAL + r"\s+(?:\w+\s+){0,3}?(?:not|never)\s+(?:be\s+)?(\w+)", re.IGNORECASE)
+# "should be copied", "should bind" (and not "should not ...")
+_ASSERTED_ACTION = re.compile(_MODAL + r"\s+(?!not\b|never\b)(?:be\s+)?(\w+)", re.IGNORECASE)
+_NOT_ACTIONS = {"i", "we", "you", "he", "she", "it", "they", "the", "a", "an", "this", "that", "these", "those",
+                "do", "does", "be", "have", "also", "only", "ever"}
 
 
 def _first_sentence(text):
     return re.split(r"(?<=[.!?])\s+", text.strip(), maxsplit=1)[0]
 
 
+def _actions(pattern, text):
+    return {m.group(1).lower() for m in pattern.finditer(text) if m.group(1).lower() not in _NOT_ACTIONS}
+
+
+def _same_action(a, b):
+    return len(a) >= 3 and len(b) >= 3 and a[:3] == b[:3]   # copied ~ copy, stored ~ store
+
+
 def polarity_mismatch(question, answer):
-    """True when the answer's direction contradicts the question's, for what/which/who
-    questions: asked what SHOULD be done but the answer lists what should NOT be, or the reverse.
-    Yes/no questions are skipped, because 'No' is a perfectly good answer to them."""
+    """True when the answer flips the same action the question asked about, for what/which/who
+    questions: 'which files SHOULD be copied?' answered with 'X should NOT be copied', or
+    'which address should NOT be bound?' answered with 'The server should bind to ...'.
+
+    Only a flip of the same action counts. A 'not' somewhere in the answer does not: safety
+    documents are full of 'do not', and an earlier looser version warned on 9 correct answers
+    to catch 3 wrong ones. Yes/no questions are skipped, because 'No' is a perfectly good answer."""
     if not _WH.match(question.strip()):
         return False
-    return bool(_Q_NEG.search(question)) != bool(_A_NEG.search(_first_sentence(answer)))
+    first = _first_sentence(answer)
+    asked_yes, asked_no = _actions(_ASSERTED_ACTION, question), _actions(_NEGATED_ACTION, question)
+    said_yes, said_no = _actions(_ASSERTED_ACTION, first), _actions(_NEGATED_ACTION, first)
+    return (any(_same_action(q, a) for q in asked_yes for a in said_no)
+            or any(_same_action(q, a) for q in asked_no for a in said_yes))
 
 
 def generate_answer(question, hits, messages, on_update=None):
