@@ -174,11 +174,11 @@ def render_sources(hits):
     grouped = {}
     for h in hits:
         m = h["meta"]
-        grouped.setdefault((m["source"], m["unit"], m["page"]), []).append((h["text"], h["distance"]))
+        grouped.setdefault((m["source"], m["unit"], m["page"], m.get("heading", "")), []).append((h["text"], h["distance"]))
     with st.popover(f"Sources ({len(grouped)})"):
-        for (src, unit, page), texts in grouped.items():
+        for (src, unit, page, heading), texts in grouped.items():
             st.markdown(
-                f'<span class="mark">{html.escape(src)}</span> &nbsp;{unit} {page}',
+                f'<span class="mark">{html.escape(src)}</span> &nbsp;{html.escape(heading) if heading else f"{unit} {page}"}',
                 unsafe_allow_html=True,
             )
             for passage, dist in texts:

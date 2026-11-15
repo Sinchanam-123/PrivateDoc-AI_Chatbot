@@ -202,3 +202,64 @@ def test_docx_merged_cells_are_read_once_but_equal_neighbours_are_kept(tmp_path)
     text = ingest.extract_pages(f)[0][0][1]
     assert text.count("Wide header") == 1
     assert "Yes | Yes | No" in text
+
+
+# ---------- heading-aware Word documents ----------
+def test_numbered_headings_are_recognised_but_sentences_are_not():
+    assert ingest.is_numbered_heading("4.1 Phishing and social engineering")
+    assert ingest.is_numbered_heading("7.5 Germany: Berlin administration ransomware incident")
+    assert not ingest.is_numbered_heading("2.5 million users were affected")
+    assert not ingest.is_numbered_heading("1. Identify the critical assets")
+    assert not ingest.is_numbered_heading("4.2 This is a long sentence that ends like one.")
+    assert not ingest.is_numbered_heading("Phishing")
+
+
+def _docx_with_cases(tmp_path):
+    from docx import Document
+    f = tmp_path / "cases.docx"
+    d = Document()
+    d.add_heading("CHAPTER 7: CASES", level=1)
+    d.add_paragraph("Introduction to the cases.")
+    d.add_heading("7.1 Canvas learning platform", level=2)
+    d.add_paragraph("Incident summary")
+    d.add_paragraph("The attackers claimed a large data theft. No ransom amount was reported.")
+    d.add_paragraph("7.2 Berlin administration")          # plain text heading, no Word style
+    d.add_paragraph("Incident summary")
+    d.add_paragraph("The attackers demanded 30 Bitcoin and exfiltrated 5.79 terabytes.")
+    d.save(f)
+    return f
+
+
+def test_docx_is_split_at_headings_including_plain_numbered_ones(tmp_path):
+    units, unit = ingest.extract_units(_docx_with_cases(tmp_path))
+    assert unit == "section"
+    assert [h for _, _, h in units] == ["CHAPTER 7: CASES", "7.1 Canvas learning platform", "7.2 Berlin administration"]
+    assert "30 Bitcoin" in units[2][1] and "30 Bitcoin" not in units[1][1]
+    assert "Incident summary" in units[1][1]            # lower headings stay inline
+
+
+def test_every_chunk_carries_its_section_title(library):
+    f = library / "cases.docx"
+    f.write_bytes(_docx_with_cases(library.parent).read_bytes())
+    ingest.index_file(f)
+    data = ingest.get_collection().get(include=["documents", "metadatas"])
+    bitcoin = [(d, m) for d, m in zip(data["documents"], data["metadatas"]) if "30 Bitcoin" in d]
+    assert len(bitcoin) == 1
+    doc, meta = bitcoin[0]
+    assert doc.startswith("[7.2 Berlin administration] ") and meta["heading"] == "7.2 Berlin administration"
+    assert not any("Bitcoin" in d and "Canvas" in d.split("]")[0] for d in data["documents"])
+
+
+def test_heading_context_can_be_switched_off(tmp_path, monkeypatch):
+    from dataclasses import replace
+    monkeypatch.setattr(ingest, "cfg", replace(ingest.cfg, heading_context=False))
+    units, _ = ingest.extract_units(_docx_with_cases(tmp_path))
+    assert all(h == "" for _, _, h in units)
+
+
+def test_other_file_types_have_no_heading(library):
+    f = library / "plain.txt"
+    f.write_text("Just some plain text content here.", encoding="utf-8")
+    ingest.index_file(f)
+    meta = ingest.get_collection().get(include=["metadatas"])["metadatas"][0]
+    assert meta["heading"] == ""
