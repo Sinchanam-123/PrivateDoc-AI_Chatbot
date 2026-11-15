@@ -147,3 +147,58 @@ def test_reindex_all_rebuilds_from_saved_files(library):
     assert total > 0
     assert sorted(ingest.list_sources()) == ["a.txt", "b.txt"]
     assert [s[1] for s in seen] == [2, 2]
+
+
+# ---------- Word tables ----------
+def _docx_with_table(tmp_path, header, rows, before="Intro paragraph.", after="Closing paragraph."):
+    from docx import Document
+    f = tmp_path / "t.docx"
+    d = Document()
+    d.add_paragraph(before)
+    table = d.add_table(rows=1 + len(rows), cols=len(header))
+    for i, h in enumerate(header):
+        table.rows[0].cells[i].text = h
+    for r, row in enumerate(rows, 1):
+        for i, c in enumerate(row):
+            table.rows[r].cells[i].text = c
+    d.add_paragraph(after)
+    d.save(f)
+    return f
+
+
+def test_docx_table_text_is_extracted_in_document_order(tmp_path):
+    f = _docx_with_table(tmp_path, ["Term", "Meaning"],
+                         [["Botnet", "A collection of compromised devices controlled by an operator"],
+                          ["Firewall", "Filters network traffic according to defined rules"]])
+    pages, unit = ingest.extract_pages(f)
+    text = pages[0][1]
+    assert "Term: Botnet; Meaning: A collection of compromised devices controlled by an operator." in text
+    assert "Term: Firewall; Meaning: Filters network traffic" in text
+    assert text.index("Intro paragraph.") < text.index("Botnet") < text.index("Closing paragraph.")
+
+
+def test_docx_table_without_a_clean_header_falls_back_to_plain_rows(tmp_path):
+    f = _docx_with_table(tmp_path, ["Same", "Same"], [["a", "b"]])
+    text = ingest.extract_pages(f)[0][0][1]
+    assert "Same | Same" in text and "a | b" in text
+
+
+def test_docx_table_is_found_by_chunk_and_search_text(tmp_path):
+    f = _docx_with_table(tmp_path, ["Term", "Meaning"], [["Attack surface", "The points through which a system may be exposed to attack"]])
+    chunks = ingest.chunk_text(ingest.extract_pages(f)[0][0][1])
+    assert any("exposed to attack" in c for c in chunks)
+
+
+def test_docx_merged_cells_are_read_once_but_equal_neighbours_are_kept(tmp_path):
+    from docx import Document
+    f = tmp_path / "m.docx"
+    d = Document()
+    table = d.add_table(rows=2, cols=3)
+    table.rows[0].cells[0].merge(table.rows[0].cells[1]).text = "Wide header"
+    table.rows[0].cells[2].text = "Other"
+    for i, v in enumerate(["Yes", "Yes", "No"]):
+        table.rows[1].cells[i].text = v
+    d.save(f)
+    text = ingest.extract_pages(f)[0][0][1]
+    assert text.count("Wide header") == 1
+    assert "Yes | Yes | No" in text

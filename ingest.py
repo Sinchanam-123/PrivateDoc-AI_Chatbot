@@ -56,6 +56,41 @@ def _split_sections(text: str):
     ]
 
 
+def _table_lines(table):
+    """One line per table row. When the first row is a header, each row becomes
+    'Term: Botnet; Meaning: A collection of ...' so the words keep their labels."""
+    rows = []
+    for row in table.rows:
+        cells, previous = [], None
+        for cell in row.cells:
+            if cell._tc is previous:  # a horizontally merged cell is returned once per column it spans
+                continue
+            previous = cell._tc
+            cells.append(" ".join(cell.text.split()))
+        rows.append(cells)
+    if not rows:
+        return []
+    header, body = rows[0], rows[1:]
+    if body and all(header) and len(set(header)) == len(header) and all(len(r) == len(header) for r in rows):
+        return ["; ".join(f"{h}: {c}" for h, c in zip(header, r) if c) + "." for r in body]
+    return [" | ".join(c for c in r if c) for r in rows]
+
+
+def _docx_text(doc):
+    """Paragraphs AND tables, in the order they appear in the document."""
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+    lines = []
+    for child in doc.element.body.iterchildren():
+        if child.tag.endswith("}p"):
+            text = Paragraph(child, doc).text.strip()
+            if text:
+                lines.append(text)
+        elif child.tag.endswith("}tbl"):
+            lines.extend(l for l in _table_lines(Table(child, doc)) if l.strip())
+    return "\n".join(lines)
+
+
 def extract_pages(path: Path):
     """Return (list of (number, text), unit_name). unit is 'page' or 'section'."""
     ext = path.suffix.lower()
@@ -65,8 +100,7 @@ def extract_pages(path: Path):
         return pages, "page"
     if ext == ".docx":
         doc = Document(str(path))
-        text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        return _split_sections(text), "section"
+        return _split_sections(_docx_text(doc)), "section"
     if ext == ".txt":
         text = path.read_text(encoding="utf-8", errors="ignore")
         return _split_sections(text), "section"
