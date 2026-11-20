@@ -15,7 +15,7 @@ class Settings:
     chunk_size: int = 800
     chunk_overlap: int = 100
     section_chars: int = 3000
-    heading_context: bool = True
+    heading_context: bool = False
     # retrieval
     candidates: int = 8
     top_k: int = 5

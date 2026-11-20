@@ -230,7 +230,18 @@ def _docx_with_cases(tmp_path):
     return f
 
 
-def test_docx_is_split_at_headings_including_plain_numbered_ones(tmp_path):
+def _headings_on(monkeypatch):
+    from dataclasses import replace
+    monkeypatch.setattr(ingest, "cfg", replace(ingest.cfg, heading_context=True))
+
+
+def test_heading_context_is_off_by_default(tmp_path):
+    units, _ = ingest.extract_units(_docx_with_cases(tmp_path))
+    assert all(h == "" for _, _, h in units)
+
+
+def test_docx_is_split_at_headings_including_plain_numbered_ones(tmp_path, monkeypatch):
+    _headings_on(monkeypatch)
     units, unit = ingest.extract_units(_docx_with_cases(tmp_path))
     assert unit == "section"
     assert [h for _, _, h in units] == ["CHAPTER 7: CASES", "7.1 Canvas learning platform", "7.2 Berlin administration"]
@@ -238,7 +249,8 @@ def test_docx_is_split_at_headings_including_plain_numbered_ones(tmp_path):
     assert "Incident summary" in units[1][1]            # lower headings stay inline
 
 
-def test_every_chunk_carries_its_section_title(library):
+def test_every_chunk_carries_its_section_title(library, monkeypatch):
+    _headings_on(monkeypatch)
     f = library / "cases.docx"
     f.write_bytes(_docx_with_cases(library.parent).read_bytes())
     ingest.index_file(f)

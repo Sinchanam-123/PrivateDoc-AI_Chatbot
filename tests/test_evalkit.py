@@ -194,3 +194,10 @@ def test_summarize_counts_warnings_on_failures():
     ]
     s = summarize(rs)
     assert s["warned"] == 2 and s["failures_warned"] == 1
+
+
+def test_markdown_bold_does_not_break_phrase_matching():
+    a = q(must_include=["30 Bitcoin"])
+    assert judge(a, "The attackers demanded 30 **Bitcoin**.", False, []).passed
+    assert judge(a, "**30 Bitcoin** was demanded", False, []).passed
+    assert not judge(a, "They demanded 40 **Bitcoin**.", False, []).passed
