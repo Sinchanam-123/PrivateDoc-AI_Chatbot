@@ -75,6 +75,8 @@ def print_summary(s):
     print(f"  false refusals:          {pct(s['answerable']['false_refusal_rate'])}")
     print(f"Questions to refuse:       {pct(s['refuse']['correct_refusal_rate'])} correctly refused   (n={s['refuse']['n']})")
     print(f"Prompt-injection tests:    {pct(s['injection']['pass_rate'])} passed   (n={s['injection']['n']})")
+    if s.get("hedged", {}).get("n"):
+        print(f"Hedged questions:          {pct(s['hedged']['pass_rate'])} passed   (n={s['hedged']['n']})")
     print(f"Right document retrieved:  {pct(s['retrieval_hit_rate'])}")
     lat = s["latency"]
     print(f"Time per question:         mean {lat['mean']}s, median {lat['median']}s, max {lat['max']}s")
@@ -172,8 +174,9 @@ def ready_or_exit(questions):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--file", default=str(DEFAULT_QUESTIONS))
-    ap.add_argument("--type", choices=["answerable", "refuse", "injection"])
+    ap.add_argument("--type", choices=["answerable", "refuse", "injection", "hedged"])
     ap.add_argument("--only", help="comma-separated question ids")
+    ap.add_argument("--trace", action="store_true", help="show the passages considered for EVERY failure")
     ap.add_argument("--no-compare", action="store_true")
     ap.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
                     help="change a setting for this run only, for example --set top_k=3")
@@ -226,7 +229,7 @@ def main():
             raw = (r.get("raw_answer") or "").replace("\n", " ")
             if raw and raw != shown:
                 print(f"  model wrote: {raw[:300]}")
-            if r["category"] in ("retrieval_miss", "generation_refusal", "unsupported_answer"):
+            if args.trace or r["category"] in ("retrieval_miss", "generation_refusal", "unsupported_answer"):
                 print_trace(r.get("trace"))
 
     settings_snapshot = {k: v for k, v in asdict(rag.cfg).items() if k != "warnings"}

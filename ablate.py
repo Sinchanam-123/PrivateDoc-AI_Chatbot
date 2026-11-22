@@ -66,7 +66,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--file", default=str(evaluate.DEFAULT_QUESTIONS))
     ap.add_argument("--names", help="comma-separated variant names (see --list)")
-    ap.add_argument("--type", choices=["answerable", "refuse", "injection"])
+    ap.add_argument("--type", choices=["answerable", "refuse", "injection", "hedged"])
     ap.add_argument("--only", help="comma-separated question ids")
     ap.add_argument("--list", action="store_true")
     args = ap.parse_args()

@@ -97,6 +97,14 @@ It prints accuracy, the false-refusal rate, the correct-refusal rate, the inject
 
 Upload `evaluation/07_Injection_Test.txt` with the Documents button before running the injection questions. See `evaluation/README.md` for the question file format.
 
+## Word tables
+
+Text inside Word tables is read too, in document order. Each row becomes a self-describing line, for example `Botnet: A collection of compromised devices ...` (two-column tables such as glossaries) or `Actor category: Hacktivists; Typical objective: ...` (tables with a header row). Documents indexed before this feature need **Rebuild index** (Documents button) before their tables become searchable.
+
+## Fixing a bad question without rerunning everything
+
+If a question turns out to be badly written, correct it in the question file and run `python rejudge.py --file evaluation\questions_cyber_80.csv`. It re-scores the answers from the last run (no model needed) and saves the result as the new comparison baseline. Questions of type `hedged` are for facts the document itself says are unknown: declining to answer and saying so both pass, inventing a value fails. `python evaluate.py --trace` shows the passages considered for every failure.
+
 ## Ablation: what does each feature contribute?
 
 `ablate.py` switches features off one at a time, reruns the questions, and prints a table showing which questions got worse or better. Run it with Ollama running and your documents indexed:

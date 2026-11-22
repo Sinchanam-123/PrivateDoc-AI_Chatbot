@@ -25,6 +25,8 @@ Matching ignores capital letters and uses whole words (`no` does not match `know
 
 To add real questions, edit the CSV in Excel (keep the column names) or run `python feedback_to_eval.py` to turn your thumbs-up and thumbs-down clicks into draft rows in `candidates.csv`.
 
+- `questions_cyber_80.csv`: 80 questions about a 66-page assignment on cyberattacks (`sample_docs/Cyberattacks_Around_the_World_Readable_Expanded_Assignment.docx`). Five of them can only be answered from tables, and one is `hedged`.
+
 ## Comparing settings
 
 `python evaluate.py --set name=value` changes a setting for one run (see `settings.ini` for names), and `python ablate.py` runs a whole set of such comparisons and writes a report. Both leave `settings.ini` untouched.

@@ -149,129 +149,71 @@ def test_reindex_all_rebuilds_from_saved_files(library):
     assert [s[1] for s in seen] == [2, 2]
 
 
-# ---------- Word tables ----------
-def _docx_with_table(tmp_path, header, rows, before="Intro paragraph.", after="Closing paragraph."):
+# ---------- tables in Word documents ----------
+def _docx_with_tables(path):
     from docx import Document
+    d = Document()
+    d.add_paragraph("Before the tables.")
+    t = d.add_table(rows=3, cols=2)                     # glossary style: two columns
+    for r, (a, b) in enumerate([("Term", "Meaning"), ("Botnet", "Compromised devices run by an operator."),
+                                ("Firewall", "Filters network traffic.")]):
+        t.cell(r, 0).text, t.cell(r, 1).text = a, b
+    d.add_paragraph("Between the tables.")
+    t2 = d.add_table(rows=3, cols=3)                    # header row with three columns
+    for r, row in enumerate([("Actor", "Goal", "Defence"), ("Hacktivists", "Political message", "Resilience"),
+                             ("Insiders", "Misuse of access", "Least privilege")]):
+        for c, text in enumerate(row):
+            t2.cell(r, c).text = text
+    t3 = d.add_table(rows=2, cols=3)                    # first row is not a header: a merged title row
+    t3.cell(0, 0).merge(t3.cell(0, 2)).text = "A merged title"
+    for c, text in enumerate(("alpha", "beta", "gamma")):
+        t3.cell(1, c).text = text
+    d.add_paragraph("After the tables.")
+    d.save(path)
+
+
+def test_docx_tables_are_extracted_in_document_order(tmp_path):
     f = tmp_path / "t.docx"
-    d = Document()
-    d.add_paragraph(before)
-    table = d.add_table(rows=1 + len(rows), cols=len(header))
-    for i, h in enumerate(header):
-        table.rows[0].cells[i].text = h
-    for r, row in enumerate(rows, 1):
-        for i, c in enumerate(row):
-            table.rows[r].cells[i].text = c
-    d.add_paragraph(after)
-    d.save(f)
-    return f
-
-
-def test_docx_table_text_is_extracted_in_document_order(tmp_path):
-    f = _docx_with_table(tmp_path, ["Term", "Meaning"],
-                         [["Botnet", "A collection of compromised devices controlled by an operator"],
-                          ["Firewall", "Filters network traffic according to defined rules"]])
+    _docx_with_tables(f)
     pages, unit = ingest.extract_pages(f)
-    text = pages[0][1]
-    assert "Term: Botnet; Meaning: A collection of compromised devices controlled by an operator." in text
-    assert "Term: Firewall; Meaning: Filters network traffic" in text
-    assert text.index("Intro paragraph.") < text.index("Botnet") < text.index("Closing paragraph.")
-
-
-def test_docx_table_without_a_clean_header_falls_back_to_plain_rows(tmp_path):
-    f = _docx_with_table(tmp_path, ["Same", "Same"], [["a", "b"]])
-    text = ingest.extract_pages(f)[0][0][1]
-    assert "Same | Same" in text and "a | b" in text
-
-
-def test_docx_table_is_found_by_chunk_and_search_text(tmp_path):
-    f = _docx_with_table(tmp_path, ["Term", "Meaning"], [["Attack surface", "The points through which a system may be exposed to attack"]])
-    chunks = ingest.chunk_text(ingest.extract_pages(f)[0][0][1])
-    assert any("exposed to attack" in c for c in chunks)
-
-
-def test_docx_merged_cells_are_read_once_but_equal_neighbours_are_kept(tmp_path):
-    from docx import Document
-    f = tmp_path / "m.docx"
-    d = Document()
-    table = d.add_table(rows=2, cols=3)
-    table.rows[0].cells[0].merge(table.rows[0].cells[1]).text = "Wide header"
-    table.rows[0].cells[2].text = "Other"
-    for i, v in enumerate(["Yes", "Yes", "No"]):
-        table.rows[1].cells[i].text = v
-    d.save(f)
-    text = ingest.extract_pages(f)[0][0][1]
-    assert text.count("Wide header") == 1
-    assert "Yes | Yes | No" in text
-
-
-# ---------- heading-aware Word documents ----------
-def test_numbered_headings_are_recognised_but_sentences_are_not():
-    assert ingest.is_numbered_heading("4.1 Phishing and social engineering")
-    assert ingest.is_numbered_heading("7.5 Germany: Berlin administration ransomware incident")
-    assert not ingest.is_numbered_heading("2.5 million users were affected")
-    assert not ingest.is_numbered_heading("1. Identify the critical assets")
-    assert not ingest.is_numbered_heading("4.2 This is a long sentence that ends like one.")
-    assert not ingest.is_numbered_heading("Phishing")
-
-
-def _docx_with_cases(tmp_path):
-    from docx import Document
-    f = tmp_path / "cases.docx"
-    d = Document()
-    d.add_heading("CHAPTER 7: CASES", level=1)
-    d.add_paragraph("Introduction to the cases.")
-    d.add_heading("7.1 Canvas learning platform", level=2)
-    d.add_paragraph("Incident summary")
-    d.add_paragraph("The attackers claimed a large data theft. No ransom amount was reported.")
-    d.add_paragraph("7.2 Berlin administration")          # plain text heading, no Word style
-    d.add_paragraph("Incident summary")
-    d.add_paragraph("The attackers demanded 30 Bitcoin and exfiltrated 5.79 terabytes.")
-    d.save(f)
-    return f
-
-
-def _headings_on(monkeypatch):
-    from dataclasses import replace
-    monkeypatch.setattr(ingest, "cfg", replace(ingest.cfg, heading_context=True))
-
-
-def test_heading_context_is_off_by_default(tmp_path):
-    units, _ = ingest.extract_units(_docx_with_cases(tmp_path))
-    assert all(h == "" for _, _, h in units)
-
-
-def test_docx_is_split_at_headings_including_plain_numbered_ones(tmp_path, monkeypatch):
-    _headings_on(monkeypatch)
-    units, unit = ingest.extract_units(_docx_with_cases(tmp_path))
+    text = "\n".join(t for _, t in pages)
     assert unit == "section"
-    assert [h for _, _, h in units] == ["CHAPTER 7: CASES", "7.1 Canvas learning platform", "7.2 Berlin administration"]
-    assert "30 Bitcoin" in units[2][1] and "30 Bitcoin" not in units[1][1]
-    assert "Incident summary" in units[1][1]            # lower headings stay inline
+    lines = text.split("\n")
+    assert lines[0] == "Before the tables."
+    assert "Botnet: Compromised devices run by an operator." in lines
+    assert "Firewall: Filters network traffic." in lines
+    assert "Actor: Hacktivists; Goal: Political message; Defence: Resilience" in lines
+    assert "Actor: Insiders; Goal: Misuse of access; Defence: Least privilege" in lines
+    assert text.index("Before") < text.index("Botnet") < text.index("Between") < text.index("Hacktivists") < text.index("After")
 
 
-def test_every_chunk_carries_its_section_title(library, monkeypatch):
-    _headings_on(monkeypatch)
-    f = library / "cases.docx"
-    f.write_bytes(_docx_with_cases(library.parent).read_bytes())
+def test_merged_cells_do_not_repeat_and_headerless_rows_fall_back_to_pipes(tmp_path):
+    f = tmp_path / "t.docx"
+    _docx_with_tables(f)
+    text = "\n".join(t for _, t in ingest.extract_pages(f)[0])
+    assert text.count("A merged title") == 1
+    assert "alpha | beta | gamma" in text.split("\n")
+
+
+def test_empty_tables_and_blank_rows_add_nothing(tmp_path):
+    from docx import Document
+    d = Document()
+    d.add_paragraph("Only text.")
+    d.add_table(rows=2, cols=2)
+    f = tmp_path / "e.docx"
+    d.save(f)
+    assert ingest.extract_pages(f)[0] == [(1, "Only text.")]
+
+
+def test_table_rows_are_searchable_after_indexing(library):
+    from docx import Document
+    d = Document()
+    d.add_paragraph("A short document.")
+    t = d.add_table(rows=2, cols=2)
+    t.cell(0, 0).text, t.cell(0, 1).text = "Term", "Meaning"
+    t.cell(1, 0).text, t.cell(1, 1).text = "Zeppelin", "A rigid airship."
+    f = library / "g.docx"
+    d.save(f)
     ingest.index_file(f)
-    data = ingest.get_collection().get(include=["documents", "metadatas"])
-    bitcoin = [(d, m) for d, m in zip(data["documents"], data["metadatas"]) if "30 Bitcoin" in d]
-    assert len(bitcoin) == 1
-    doc, meta = bitcoin[0]
-    assert doc.startswith("[7.2 Berlin administration] ") and meta["heading"] == "7.2 Berlin administration"
-    assert not any("Bitcoin" in d and "Canvas" in d.split("]")[0] for d in data["documents"])
-
-
-def test_heading_context_can_be_switched_off(tmp_path, monkeypatch):
-    from dataclasses import replace
-    monkeypatch.setattr(ingest, "cfg", replace(ingest.cfg, heading_context=False))
-    units, _ = ingest.extract_units(_docx_with_cases(tmp_path))
-    assert all(h == "" for _, _, h in units)
-
-
-def test_other_file_types_have_no_heading(library):
-    f = library / "plain.txt"
-    f.write_text("Just some plain text content here.", encoding="utf-8")
-    ingest.index_file(f)
-    meta = ingest.get_collection().get(include=["metadatas"])["metadatas"][0]
-    assert meta["heading"] == ""
+    data = ingest.get_collection().get(include=["documents"])
+    assert any("Zeppelin: A rigid airship." in doc for doc in data["documents"])

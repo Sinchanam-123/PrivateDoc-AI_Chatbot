@@ -15,7 +15,6 @@ class Settings:
     chunk_size: int = 800
     chunk_overlap: int = 100
     section_chars: int = 3000
-    heading_context: bool = False
     # retrieval
     candidates: int = 8
     top_k: int = 5
@@ -48,7 +47,6 @@ _SECTIONS = {
     "chunk_size": ("chunking", "chunk_size"),
     "chunk_overlap": ("chunking", "chunk_overlap"),
     "section_chars": ("chunking", "section_chars"),
-    "heading_context": ("chunking", "heading_context"),
     "candidates": ("retrieval", "candidates"),
     "top_k": ("retrieval", "top_k"),
     "max_distance": ("retrieval", "max_distance"),
