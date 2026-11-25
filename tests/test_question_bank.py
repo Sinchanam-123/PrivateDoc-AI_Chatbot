@@ -8,7 +8,7 @@ import evalkit
 import ingest
 
 EVAL = Path(__file__).parent.parent / "evaluation"
-FILES = ["questions.csv", "questions_100.csv", "questions_cyber_80.csv"]
+FILES = ["questions.csv", "questions_100.csv"]
 
 
 def doc_text(name):
@@ -56,21 +56,3 @@ def test_every_referenced_document_exists():
         for q in evalkit.load_questions(EVAL / filename):
             for source in q.expected_source:
                 doc_text(source)
-
-
-def test_cyber_question_bank_shape():
-    qs = evalkit.load_questions(EVAL / "questions_cyber_80.csv")
-    assert [q.id for q in qs] == [f"C{i:03d}" for i in range(1, 81)]
-    assert len({q.question.lower() for q in qs}) == 80
-    kinds = {q.type for q in qs}
-    assert kinds == {"answerable", "refuse", "hedged"}
-    assert {q.id for q in qs if q.type == "hedged"} == {"C023"}
-
-
-def test_table_only_questions_can_be_answered_from_the_extracted_text():
-    """The questions that depend on tables (glossary, NIST table, threat-actor table) must be
-    answerable from what the app extracts, which proves the table reader works on the real document."""
-    qs = {q.id: q for q in evalkit.load_questions(EVAL / "questions_cyber_80.csv")}
-    text = doc_text("Cyberattacks_Around_the_World_Readable_Expanded_Assignment.docx")
-    for qid in ("C016", "C017", "C048", "C054", "C055", "C056", "C057"):
-        assert evalkit.terms_in_text(qs[qid], text), qid

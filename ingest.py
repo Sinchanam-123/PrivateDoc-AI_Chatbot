@@ -10,9 +10,6 @@ except ImportError:  # older installs
 import ollama
 from chromadb.config import Settings
 from docx import Document
-from docx.oxml.ns import qn
-from docx.table import Table
-from docx.text.paragraph import Paragraph
 
 from settings import cfg
 
@@ -59,46 +56,92 @@ def _split_sections(text: str):
     ]
 
 
-def _row_cells(row):
-    """Cell texts of one table row. Merged cells repeat in python-docx, so repeats are dropped."""
-    cells = []
-    for cell in row.cells:
-        text = " ".join(cell.text.split())
-        if cells and text == cells[-1]:
-            continue
-        cells.append(text)
-    return cells
-
-
 def _table_lines(table):
-    """Turn a Word table into self-describing text lines, one per row.
-
-    Two columns (for example a glossary):          'Botnet: A collection of compromised devices ...'
-    Three or more columns with a header row:       'Actor category: Hacktivists; Typical objective: ...'
-    Anything without a clear header row:           cells joined with ' | '
-    A bare row of cells says little once it is cut into chunks, so each line carries its own labels."""
-    rows = [r for r in (_row_cells(r) for r in table.rows) if any(r)]
+    """One line per table row. When the first row is a header, each row becomes
+    'Term: Botnet; Meaning: A collection of ...' so the words keep their labels."""
+    rows = []
+    for row in table.rows:
+        cells, previous = [], None
+        for cell in row.cells:
+            if cell._tc is previous:  # a horizontally merged cell is returned once per column it spans
+                continue
+            previous = cell._tc
+            cells.append(" ".join(cell.text.split()))
+        rows.append(cells)
     if not rows:
         return []
     header, body = rows[0], rows[1:]
-    if len(header) == 2 and body and all(len(r) == 2 for r in body):
-        return [f"{r[0]}: {r[1]}" for r in body if r[0] and r[1]]
-    if len(header) >= 3 and body and all(header) and len(set(header)) == len(header):
-        return ["; ".join(f"{h}: {v}" for h, v in zip(header, r) if v) for r in body]
+    if body and all(header) and len(set(header)) == len(header) and all(len(r) == len(header) for r in rows):
+        return ["; ".join(f"{h}: {c}" for h, c in zip(header, r) if c) + "." for r in body]
     return [" | ".join(c for c in r if c) for r in rows]
 
 
 def _docx_text(doc):
-    """Paragraphs and tables in the order they appear in the document."""
-    parts = []
+    """Paragraphs AND tables, in the order they appear in the document."""
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+    lines = []
     for child in doc.element.body.iterchildren():
-        if child.tag == qn("w:p"):
+        if child.tag.endswith("}p"):
             text = Paragraph(child, doc).text.strip()
             if text:
-                parts.append(text)
-        elif child.tag == qn("w:tbl"):
-            parts.extend(_table_lines(Table(child, doc)))
-    return "\n".join(parts)
+                lines.append(text)
+        elif child.tag.endswith("}tbl"):
+            lines.extend(l for l in _table_lines(Table(child, doc)) if l.strip())
+    return "\n".join(lines)
+
+
+_NUMBERED_HEADING = re.compile(r"^\d{1,2}(?:\.\d{1,2})+\s+[A-Z]")
+
+
+def is_numbered_heading(text: str) -> bool:
+    """'4.1 Phishing and social engineering' is a heading; '2.5 million users' and '1. Identify' are not."""
+    t = text.strip()
+    return len(t) <= 110 and bool(_NUMBERED_HEADING.match(t)) and not t.endswith((".", ":", ";", ","))
+
+
+def _docx_units(doc):
+    """Split a Word document into (heading, text) units at Heading 1, Heading 2 and numbered
+    headings such as '7.5 Germany'. Many real documents type those numbers as plain text, so
+    the style alone is not enough. Lower headings and tables stay inside their unit."""
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    units, state = [], {"heading": "", "lines": []}
+
+    def flush():
+        if state["lines"]:
+            units.append((state["heading"], "\n".join(state["lines"])))
+        state["lines"] = []
+
+    for child in doc.element.body.iterchildren():
+        if child.tag.endswith("}p"):
+            p = Paragraph(child, doc)
+            text = p.text.strip()
+            if not text:
+                continue
+            style = p.style.name if p.style is not None and p.style.name else ""
+            if style.startswith("Heading 1") or style == "Title" or style.startswith("Heading 2") or is_numbered_heading(text):
+                flush()
+                state["heading"] = " ".join(text.split())[:120]
+            else:
+                state["lines"].append(text)
+        elif child.tag.endswith("}tbl"):
+            state["lines"].extend(l for l in _table_lines(Table(child, doc)) if l.strip())
+    flush()
+    return units
+
+
+def extract_units(path):
+    """Like extract_pages, but each unit also carries its section heading: (number, text, heading)."""
+    path = Path(path)
+    if path.suffix.lower() == ".docx" and cfg.heading_context:
+        doc = Document(str(path))
+        units = [(n, text, heading) for n, (heading, text) in enumerate(_docx_units(doc), 1) if text.strip()]
+        if units:
+            return units, "section"
+    pages, unit = extract_pages(path)
+    return [(n, text, "") for n, text in pages], unit
 
 
 def extract_pages(path: Path):
@@ -109,7 +152,8 @@ def extract_pages(path: Path):
             pages = [(i + 1, page.get_text()) for i, page in enumerate(pdf)]
         return pages, "page"
     if ext == ".docx":
-        return _split_sections(_docx_text(Document(str(path)))), "section"
+        doc = Document(str(path))
+        return _split_sections(_docx_text(doc)), "section"
     if ext == ".txt":
         text = path.read_text(encoding="utf-8", errors="ignore")
         return _split_sections(text), "section"
@@ -157,13 +201,13 @@ def index_file(path: Path) -> int:
     collection = get_collection()
     collection.delete(where={"source": path.name})
 
-    pages, unit = extract_pages(path)
+    units, unit = extract_units(path)
     ids, docs, metas = [], [], []
-    for number, text in pages:
+    for number, text, heading in units:
         for j, chunk in enumerate(chunk_text(text)):
             ids.append(f"{path.name}:{number}:{j}")
-            docs.append(chunk)
-            metas.append({"source": path.name, "page": number, "unit": unit})
+            docs.append(f"[{heading}] {chunk}" if heading else chunk)  # the section title travels with every passage
+            metas.append({"source": path.name, "page": number, "unit": unit, "heading": heading})
 
     if not docs:
         return 0  # e.g. a scanned PDF with no extractable text

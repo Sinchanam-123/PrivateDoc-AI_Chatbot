@@ -132,3 +132,15 @@ def test_run_questions_progress_counts_skipped_questions_too():
     skipped = [Question("S1", "answerable", "q?", ["x"], [], [], ["missing.txt"])]
     evaluate.run_questions(skipped, set(), verbose=False, progress=lambda d, t, r: seen.append((d, t, r["skipped"])))
     assert seen == [(1, 1, True)]
+
+
+def test_results_keep_the_passages_the_model_saw(monkeypatch):
+    def fake(question):
+        return {"answer": "x", "raw": "x", "refused": False, "warned": False, "retrieved": ["doc.txt"], "pages": [],
+                "trace": [], "removed": 0, "seconds": 0.1,
+                "passages": [{"source": "doc.txt", "text": "the passage text"}]}
+    monkeypatch.setattr(evaluate, "ask", fake)
+    rows = evaluate.run_questions(QS, {"doc.txt"}, verbose=False)
+    assert rows[0]["passages"] == [{"source": "doc.txt", "text": "the passage text"}]
+    skipped = evaluate.run_questions([Question("S", "answerable", "q?", ["x"], [], [], ["missing.txt"])], set(), verbose=False)
+    assert skipped[0]["passages"] == []
